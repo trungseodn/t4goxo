@@ -1,0 +1,78 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: ztreel4_postgres_prod
+    environment:
+      POSTGRES_USER: user_t4
+      POSTGRES_PASSWORD: PasswordT4_2026!
+      POSTGRES_DB: ztreel_t4
+    ports:
+      - "5435:5432"
+    volumes:
+      - ztreel4_postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - ztreel4_net
+
+  redis:
+    image: redis:7
+    container_name: ztreel4_redis_prod
+    ports:
+      - "6382:6379"
+    volumes:
+      - ztreel4_redis_data:/data
+    restart: unless-stopped
+    networks:
+      - ztreel4_net
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: ztreel4_api_prod
+    ports:
+      - "3004:3000"
+    env_file:
+      - apps/api/.env
+    environment:
+      DATABASE_URL: "postgresql://user_t4:PasswordT4_2026!@postgres:5432/ztreel_t4?schema=public"
+      REDIS_HOST: "redis"
+      REDIS_PORT: 6379
+      PORT: 3000
+      JWT_SECRET: "ztreel_t4_super_secret_key_2026"
+      RENDER_CONCURRENCY: 1
+      NODE_ENV: "production"
+    volumes:
+      - ztreel4_storage:/usr/src/app/apps/api/storage
+      - ztreel4_uploads:/usr/src/app/apps/api/uploads
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+    networks:
+      - ztreel4_net
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    container_name: ztreel4_web_prod
+    ports:
+      - "8084:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+    networks:
+      - ztreel4_net
+
+volumes:
+  ztreel4_postgres_data:
+  ztreel4_redis_data:
+  ztreel4_storage:
+  ztreel4_uploads:
+
+networks:
+  ztreel4_net:
+    driver: bridge

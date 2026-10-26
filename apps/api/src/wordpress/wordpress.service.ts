@@ -965,4 +965,123 @@ export class ZTTeamWordpressService {
       message: `Đã đồng bộ thành công ${totalSynced} bài viết vào Kho Đăng Thủ Công!`
     };
   }
+
+  /**
+   * ZTTeam: Đồng bộ bài viết hàng loạt cho nhiều Fanpage hoặc theo Business Manager (BM)
+   */
+  async ztteam_bulkSyncPages(
+    userId: string,
+    body: {
+      scope?: 'selected' | 'bm' | 'all';
+      pageIds?: string[];
+      bmName?: string;
+      maxBatch?: number;
+    }
+  ): Promise<{
+    success: boolean;
+    totalPages: number;
+    successfulPages: number;
+    totalPostsSynced: number;
+    message: string;
+  }> {
+    const { scope = 'selected', pageIds = [], bmName, maxBatch = 2 } = body;
+
+    const user = await this.prisma.ztteam_users.findUnique({ where: { id: userId } });
+    const isAdmin = !user || user.role === 'ADMIN';
+
+    let candidatePages: any[] = [];
+
+    if (scope === 'bm' && bmName) {
+      candidatePages = await this.prisma.ztteam_pages.findMany({
+        where: {
+          is_active: true,
+          fb_account: {
+            business_name: bmName,
+            ...(isAdmin ? {} : { owner_user_id: userId }),
+          }
+        },
+        include: { sources: true }
+      });
+    } else if (scope === 'all') {
+      candidatePages = await this.prisma.ztteam_pages.findMany({
+        where: {
+          is_active: true,
+          ...(isAdmin ? {} : { fb_account: { owner_user_id: userId } }),
+        },
+        include: { sources: true }
+      });
+    } else {
+      /** scope === 'selected' */
+      if (!pageIds || pageIds.length === 0) {
+        return {
+          success: false,
+          totalPages: 0,
+          successfulPages: 0,
+          totalPostsSynced: 0,
+          message: 'Vui lòng chọn ít nhất 1 Fanpage để đồng bộ.'
+        };
+      }
+
+      candidatePages = await this.prisma.ztteam_pages.findMany({
+        where: {
+          is_active: true,
+          OR: [
+            { id: { in: pageIds } },
+            { fb_page_id: { in: pageIds } }
+          ],
+          ...(isAdmin ? {} : { fb_account: { owner_user_id: userId } }),
+        },
+        include: { sources: true }
+      });
+    }
+
+    if (candidatePages.length === 0) {
+      return {
+        success: false,
+        totalPages: 0,
+        successfulPages: 0,
+        totalPostsSynced: 0,
+        message: 'Không tìm thấy Fanpage nào phù hợp với phạm vi đã chọn.'
+      };
+    }
+
+    let totalPostsSynced = 0;
+    let successfulPages = 0;
+    let skippedNoSourcePages = 0;
+
+    for (const page of candidatePages) {
+      const activeSources = (page.sources || []).filter((s: any) => s.is_active && s.target_site_id);
+      if (activeSources.length === 0) {
+        skippedNoSourcePages++;
+        continue;
+      }
+
+      try {
+        const res = await this.ztteam_syncPostsForPage(page.id, {
+          maxBatch: maxBatch || 2,
+          forceSync: true,
+          userId
+        });
+        if (res.count > 0) {
+          totalPostsSynced += res.count;
+        }
+        successfulPages++;
+      } catch (err: any) {
+        this.logger.error(`Bulk sync failed for page ${page.name} (${page.id}): ${err.message}`);
+      }
+    }
+
+    let summaryMsg = `Đã đồng bộ ${totalPostsSynced} bài viết cho ${successfulPages}/${candidatePages.length} Fanpage!`;
+    if (skippedNoSourcePages > 0) {
+      summaryMsg += ` (${skippedNoSourcePages} Fanpage chưa cài nguồn Web nên được bỏ qua).`;
+    }
+
+    return {
+      success: true,
+      totalPages: candidatePages.length,
+      successfulPages,
+      totalPostsSynced,
+      message: summaryMsg
+    };
+  }
 }

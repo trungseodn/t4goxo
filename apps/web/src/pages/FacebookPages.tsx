@@ -660,6 +660,13 @@ export default function FacebookPages() {
   const [bulkCategoryScope, setBulkCategoryScope] = useState<'selected' | 'bm'>('selected');
   const [bulkCategoryBm, setBulkCategoryBm] = useState<string>('');
 
+  /** State Modal Đồng Bộ Bài Viết Từ Website Hàng Loạt */
+  const [isBulkSyncModalOpen, setIsBulkSyncModalOpen] = useState(false);
+  const [isSubmittingBulkSync, setIsSubmittingBulkSync] = useState(false);
+  const [bulkSyncScope, setBulkSyncScope] = useState<'selected' | 'bm' | 'all'>('selected');
+  const [bulkSyncBm, setBulkSyncBm] = useState<string>('');
+  const [bulkSyncBatchSize, setBulkSyncBatchSize] = useState<number>(2);
+
   const uniqueOwners = Array.from(new Set(pages.map(p => p.ownerName).filter(Boolean)));
   const uniqueBusinesses = Array.from(new Set(pages.map(p => p.businessName).filter(Boolean)));
   const uniqueTags = Array.from(new Set(pages.flatMap(p => p.tags || [])));
@@ -883,6 +890,78 @@ export default function FacebookPages() {
     }
   };
 
+  /** Xử lý Đồng Bộ Bài Viết Từ Website Hàng Loạt */
+  const handleBulkSyncSubmit = async () => {
+    let targetPages: any[] = [];
+
+    if (bulkSyncScope === 'bm') {
+      if (!bulkSyncBm) {
+        ztteam_showToast('Vui lòng chọn Doanh nghiệp / Business Manager (BM)', 'error');
+        return;
+      }
+      targetPages = pages.filter(p => p.businessName === bulkSyncBm && p.isActive !== false);
+      if (targetPages.length === 0) {
+        ztteam_showToast(`Không tìm thấy Fanpage đang hoạt động nào trong BM "${bulkSyncBm}"`, 'error');
+        return;
+      }
+    } else if (bulkSyncScope === 'all') {
+      targetPages = pages.filter(p => p.isActive !== false);
+      if (targetPages.length === 0) {
+        ztteam_showToast('Không có Fanpage nào đang hoạt động trong hệ thống', 'error');
+        return;
+      }
+    } else {
+      /** scope === 'selected' */
+      if (selectedPageIds.length === 0) {
+        ztteam_showToast('Vui lòng chọn ít nhất 1 Fanpage', 'error');
+        return;
+      }
+      targetPages = pages.filter(p => selectedPageIds.includes(p.id));
+    }
+
+    const pagesWithSources = targetPages.filter(p => p.sources && p.sources.length > 0);
+
+    const confirm = await ztteam_showConfirm(
+      'Xác nhận Đồng bộ từ Web hàng loạt',
+      `Hệ thống sẽ lấy tối đa ${bulkSyncBatchSize} bài viết mới nhất từ Website WordPress của ${targetPages.length} Fanpage (${pagesWithSources.length} Page đã cài đặt nguồn Web), dùng ảnh chuẩn có sẵn để tạo hàng đợi Render Video Reels.\n\nBạn có muốn bắt đầu ngay?`
+    );
+
+    if (!confirm) return;
+
+    try {
+      setIsSubmittingBulkSync(true);
+
+      const resolvedPageIds = targetPages.map(selPage => {
+        return (selPage as any)?.internalId || selPage.id;
+      });
+
+      const res = await api.post('/wordpress/bulk-sync-pages', {
+        scope: bulkSyncScope,
+        pageIds: resolvedPageIds,
+        bmName: bulkSyncBm,
+        maxBatch: bulkSyncBatchSize,
+      });
+
+      if (res.data?.success) {
+        ztteam_showToast(
+          res.data.message || `Đã đồng bộ ${res.data.totalPostsSynced || 0} bài viết cho các Fanpage!`,
+          'success'
+        );
+        setIsBulkSyncModalOpen(false);
+        await ztteam_fetchPagesFromDB();
+      } else {
+        ztteam_showToast(res.data?.message || 'Không có bài viết mới nào được đồng bộ', 'info');
+      }
+    } catch (err: any) {
+      ztteam_showToast(
+        err.response?.data?.message || err.message || 'Lỗi khi đồng bộ bài viết từ Website',
+        'error'
+      );
+    } finally {
+      setIsSubmittingBulkSync(false);
+    }
+  };
+
   useEffect(() => {
     const handleSDKLoad = () => {
       ztteam_checkLoginStatus();
@@ -997,11 +1076,30 @@ export default function FacebookPages() {
 
             <button
               onClick={() => navigate('/facebook/business-hub')}
-              className="px-3.5 py-2 bg-blue-500/15 hover:bg-blue-500/25 text-blue-400 rounded-full text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-colors border border-blue-500/30 col-span-2 sm:col-span-1"
+              className="px-3.5 py-2 bg-blue-500/15 hover:bg-blue-500/25 text-blue-400 rounded-full text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-colors border border-blue-500/30 col-span-1"
               title="Mở Quản Lý Doanh Nghiệp (BM) & Token Vĩnh Viễn"
             >
               <span className="material-symbols-outlined text-base">domain</span>
               <span className="truncate">Quản Lý BM &amp; App</span>
+            </button>
+
+            <button
+              onClick={() => {
+                if (selectedPageIds.length > 0) {
+                  setBulkSyncScope('selected');
+                } else if (uniqueBusinesses.length > 0) {
+                  setBulkSyncScope('bm');
+                  if (!bulkSyncBm) setBulkSyncBm(uniqueBusinesses[0] as string);
+                } else {
+                  setBulkSyncScope('all');
+                }
+                setIsBulkSyncModalOpen(true);
+              }}
+              className="px-3.5 py-2 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-400 rounded-full text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 transition-colors border border-emerald-500/30 col-span-1 shadow-sm"
+              title="Đồng bộ bài viết từ Website WordPress ngay vào Fanpage để Render Video Reels"
+            >
+              <span className="material-symbols-outlined text-base">cloud_sync</span>
+              <span className="truncate">Đồng Bộ Từ Web</span>
             </button>
           </div>
 
@@ -1462,6 +1560,17 @@ export default function FacebookPages() {
             >
               <span className="material-symbols-outlined text-base">tune</span>
               <span>Cài Đặt Lịch & Kiểu Video</span>
+            </button>
+
+            <button
+              onClick={() => {
+                setBulkSyncScope('selected');
+                setIsBulkSyncModalOpen(true);
+              }}
+              className="px-4 py-2 bg-gradient-to-r from-teal-600 to-emerald-600 hover:opacity-90 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-md shadow-emerald-500/20 active:scale-95 transition-all"
+            >
+              <span className="material-symbols-outlined text-base">cloud_sync</span>
+              <span>Đồng Bộ Từ Web ({selectedPageIds.length})</span>
             </button>
 
             <button
@@ -2162,23 +2271,23 @@ export default function FacebookPages() {
           </div>
         </div>
       )}
-
-      {/** MODAL ĐỔI HẠNG MỤC (CATEGORY) HÀNG LOẠT */}
-      {isBulkCategoryModalOpen && (
+      {/** MODAL ĐỒNG BỘ TỪ WEB HÀNG LOẠT (NHIỀU PAGE HOẶC THEO BM) */}
+      {isBulkSyncModalOpen && (
         <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
-          <div className="bg-fb-surface w-full max-w-lg rounded-3xl p-6 shadow-2xl space-y-5 border border-slate-700/60 flex flex-col max-h-[90vh] overflow-y-auto">
+          <div className="bg-fb-surface w-full max-w-2xl rounded-3xl p-6 shadow-2xl space-y-5 border border-slate-700/60 flex flex-col max-h-[92vh] overflow-y-auto">
+            {/** Header */}
             <div className="flex items-center justify-between pb-3 border-b border-fb-surface-hover/50">
               <div className="flex items-center gap-2.5">
-                <div className="w-10 h-10 rounded-xl bg-cyan-500/20 text-cyan-400 flex items-center justify-center shadow-md">
-                  <span className="material-symbols-outlined text-xl">category</span>
-                </div>
+                <span className="p-2 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-500 text-white shadow-md shadow-emerald-500/20">
+                  <span className="material-symbols-outlined text-lg">cloud_sync</span>
+                </span>
                 <div>
-                  <h3 className="font-bold text-base text-fb-text">Đổi Hạng Mục Fanpage Hàng Loạt</h3>
-                  <p className="text-xs text-fb-text-muted">Cập nhật hạng mục (Category) trực tiếp lên Meta Facebook Graph API</p>
+                  <h3 className="text-base font-bold text-white">Đồng Bộ Bài Viết Từ Website WordPress Hàng Loạt</h3>
+                  <p className="text-xs text-fb-text-muted mt-0.5">Lấy bài viết có sẵn từ Website, dùng trực tiếp ảnh chuẩn để tạo hàng đợi render video Reels.</p>
                 </div>
               </div>
               <button
-                onClick={() => setIsBulkCategoryModalOpen(false)}
+                onClick={() => setIsBulkSyncModalOpen(false)}
                 className="w-8 h-8 rounded-full bg-fb-surface-hover hover:bg-fb-surface-hover/80 flex items-center justify-center text-fb-text-muted hover:text-white transition-colors"
               >
                 <span className="material-symbols-outlined text-lg">close</span>
@@ -2186,22 +2295,22 @@ export default function FacebookPages() {
             </div>
 
             <div className="space-y-4">
-              {/** PHẠM VI ÁP DỤNG: THEO BM HOẶC PAGE ĐÃ CHỌN */}
+              {/** PHẠM VI ÁP DỤNG: THEO PAGE ĐÃ CHỌN, THEO BM, HOẶC TẤT CẢ */}
               <div className="bg-fb-surface-hover/20 p-4 rounded-2xl border border-fb-surface-hover/40 space-y-3">
-                <label className="block text-xs font-bold text-cyan-400 uppercase tracking-wider">
-                  1. Phạm Vi Áp Dụng
+                <label className="block text-xs font-bold text-emerald-400 uppercase tracking-wider">
+                  1. Phạm Vi Đồng Bộ
                 </label>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   <button
                     type="button"
-                    onClick={() => setBulkCategoryScope('selected')}
+                    onClick={() => setBulkSyncScope('selected')}
                     className={`p-3 rounded-xl border text-left transition-all flex items-center gap-2.5 ${
-                      bulkCategoryScope === 'selected'
-                        ? 'bg-cyan-500/15 border-cyan-500/60 text-white font-bold shadow-md shadow-cyan-500/10'
+                      bulkSyncScope === 'selected'
+                        ? 'bg-emerald-500/15 border-emerald-500/60 text-white font-bold shadow-md shadow-emerald-500/10'
                         : 'bg-slate-800/40 border-slate-700/60 text-fb-text-muted hover:border-slate-500'
                     }`}
                   >
-                    <span className="material-symbols-outlined text-base text-cyan-400">checklist</span>
+                    <span className="material-symbols-outlined text-base text-emerald-400">checklist</span>
                     <div>
                       <div className="text-xs font-bold text-white">Fanpage Đã Chọn</div>
                       <div className="text-[10px] text-slate-400">({selectedPageIds.length} Page)</div>
@@ -2211,33 +2320,49 @@ export default function FacebookPages() {
                   <button
                     type="button"
                     onClick={() => {
-                      setBulkCategoryScope('bm');
-                      if (!bulkCategoryBm && uniqueBusinesses.length > 0) {
-                        setBulkCategoryBm(uniqueBusinesses[0] as string);
+                      setBulkSyncScope('bm');
+                      if (!bulkSyncBm && uniqueBusinesses.length > 0) {
+                        setBulkSyncBm(uniqueBusinesses[0] as string);
                       }
                     }}
                     className={`p-3 rounded-xl border text-left transition-all flex items-center gap-2.5 ${
-                      bulkCategoryScope === 'bm'
-                        ? 'bg-cyan-500/15 border-cyan-500/60 text-white font-bold shadow-md shadow-cyan-500/10'
+                      bulkSyncScope === 'bm'
+                        ? 'bg-emerald-500/15 border-emerald-500/60 text-white font-bold shadow-md shadow-emerald-500/10'
                         : 'bg-slate-800/40 border-slate-700/60 text-fb-text-muted hover:border-slate-500'
                     }`}
                   >
                     <span className="material-symbols-outlined text-base text-blue-400">corporate_fare</span>
                     <div>
                       <div className="text-xs font-bold text-white">Theo Doanh Nghiệp (BM)</div>
-                      <div className="text-[10px] text-slate-400">Toàn bộ Page trong BM</div>
+                      <div className="text-[10px] text-slate-400">({uniqueBusinesses.length} BM)</div>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setBulkSyncScope('all')}
+                    className={`p-3 rounded-xl border text-left transition-all flex items-center gap-2.5 ${
+                      bulkSyncScope === 'all'
+                        ? 'bg-emerald-500/15 border-emerald-500/60 text-white font-bold shadow-md shadow-emerald-500/10'
+                        : 'bg-slate-800/40 border-slate-700/60 text-fb-text-muted hover:border-slate-500'
+                    }`}
+                  >
+                    <span className="material-symbols-outlined text-base text-cyan-400">public</span>
+                    <div>
+                      <div className="text-xs font-bold text-white">Tất Cả Fanpage</div>
+                      <div className="text-[10px] text-slate-400">({activePages.length} Page hoạt động)</div>
                     </div>
                   </button>
                 </div>
 
-                {bulkCategoryScope === 'bm' && (
+                {bulkSyncScope === 'bm' && (
                   <div className="pt-2 animate-in fade-in duration-200">
                     <label className="block text-xs font-bold text-fb-text mb-1.5">
                       Chọn Business Manager (BM):
                     </label>
                     <CustomDropdown
-                      value={bulkCategoryBm}
-                      onChange={(val) => setBulkCategoryBm(val)}
+                      value={bulkSyncBm}
+                      onChange={(val) => setBulkSyncBm(val)}
                       options={uniqueBusinesses.map(b => {
                         const count = pages.filter(p => p.businessName === b && p.isActive !== false).length;
                         return {
@@ -2251,129 +2376,163 @@ export default function FacebookPages() {
                 )}
               </div>
 
-              {/** CHỌN HẠNG MỤC MỚI */}
+              {/** CẤU HÌNH SỐ LƯỢNG BÀI VIẾT ĐỒNG BỘ */}
               <div className="bg-fb-surface-hover/20 p-4 rounded-2xl border border-fb-surface-hover/40 space-y-3">
-                <label className="block text-xs font-bold text-cyan-400 uppercase tracking-wider">
-                  2. Chọn Hạng Mục Muốn Đổi
+                <label className="block text-xs font-bold text-emerald-400 uppercase tracking-wider">
+                  2. Số Lượng Bài Viết Đồng Bộ Mỗi Page
                 </label>
-                <div>
-                  <CustomDropdown
-                    value={bulkCategoryId}
-                    onChange={(val) => setBulkCategoryId(val)}
-                    options={FB_POPULAR_CATEGORIES.map(cat => ({
-                      value: cat.id,
-                      label: `${cat.name} — [${cat.desc}]`
-                    }))}
-                    className="w-full"
-                  />
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {[1, 2, 3, 5].map(num => (
+                    <button
+                      key={num}
+                      type="button"
+                      onClick={() => setBulkSyncBatchSize(num)}
+                      className={`py-2 px-3 rounded-xl border text-center transition-all ${
+                        bulkSyncBatchSize === num
+                          ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300 font-bold shadow-sm'
+                          : 'bg-slate-800/40 border-slate-700/60 text-slate-400 hover:border-slate-500'
+                      }`}
+                    >
+                      <div className="text-sm font-bold">{num} bài / Page</div>
+                      <div className="text-[10px] text-slate-400">{num === 2 ? 'Khuyến nghị' : (num === 1 ? 'Nhanh nhất' : 'Số lượng lớn')}</div>
+                    </button>
+                  ))}
                 </div>
-
-                {bulkCategoryId === 'custom' && (
-                  <div className="space-y-2.5 pt-2 animate-in fade-in duration-200">
-                    <div>
-                      <label className="block text-[11px] font-bold text-slate-300 mb-1">
-                        Facebook Category ID (Bắt buộc):
-                      </label>
-                      <input
-                        type="text"
-                        placeholder="Ví dụ: 196739023685716 hoặc 2214"
-                        value={bulkCategoryCustomId}
-                        onChange={(e) => setBulkCategoryCustomId(e.target.value)}
-                        className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] font-bold text-slate-300 mb-1">
-                        Tên Hạng Mục Hiển Thị:
-                      </label>
-                      <input
-                        type="text"
-                        placeholder="Ví dụ: Tin Tức & Truyền Thông"
-                        value={bulkCategoryCustomName}
-                        onChange={(e) => setBulkCategoryCustomName(e.target.value)}
-                        className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-500"
-                      />
-                    </div>
+                <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-xs text-emerald-300 flex items-start gap-2">
+                  <span className="material-symbols-outlined text-base text-emerald-400 shrink-0 mt-0.5">verified</span>
+                  <div>
+                    <span className="font-bold">Phương thức tối ưu:</span> Hệ thống sử dụng trực tiếp ảnh chuẩn đã có sẵn của bài viết trên WordPress, KHÔNG gọi tạo ảnh AI giúp render video Reels ngay lập tức và tiết kiệm tối đa tài nguyên.
                   </div>
-                )}
+                </div>
               </div>
 
-              {/** PREVIEW DANH SÁCH PAGE SẼ ĐƯỢC CẬP NHẬT */}
-              <div className="border border-slate-700/60 rounded-2xl overflow-hidden">
-                <div className="p-2.5 bg-slate-800/60 font-bold text-slate-300 text-[11px] border-b border-slate-700/60 flex items-center justify-between">
-                  <span>Xem trước Fanpage sẽ cập nhật:</span>
-                  <span className="text-[10px] text-cyan-400 font-mono">
-                    {(() => {
-                      const targetPages = bulkCategoryScope === 'bm'
-                        ? pages.filter(p => p.businessName === bulkCategoryBm && p.isActive !== false)
-                        : pages.filter(p => selectedPageIds.includes(p.id));
-                      return `${targetPages.length} Fanpage`;
-                    })()}
-                  </span>
-                </div>
-                <div className="divide-y divide-slate-800/70 text-[11px] max-h-36 overflow-y-auto">
-                  {(() => {
-                    const targetPages = bulkCategoryScope === 'bm'
-                      ? pages.filter(p => p.businessName === bulkCategoryBm && p.isActive !== false)
-                      : pages.filter(p => selectedPageIds.includes(p.id));
+              {/** PREVIEW DANH SÁCH FANPAGE SẼ ĐỒNG BỘ */}
+              {(() => {
+                let targetPages: any[] = [];
+                if (bulkSyncScope === 'bm') {
+                  targetPages = pages.filter(p => p.businessName === bulkSyncBm && p.isActive !== false);
+                } else if (bulkSyncScope === 'all') {
+                  targetPages = pages.filter(p => p.isActive !== false);
+                } else {
+                  targetPages = pages.filter(p => selectedPageIds.includes(p.id));
+                }
 
-                    if (targetPages.length === 0) {
-                      return (
-                        <div className="p-3 text-center text-slate-400 text-xs">
-                          Chưa có Fanpage nào được chọn
-                        </div>
-                      );
-                    }
+                const pagesWithSources = targetPages.filter(p => p.sources && p.sources.length > 0);
+                const pagesWithoutSources = targetPages.filter(p => !p.sources || p.sources.length === 0);
 
-                    return targetPages.slice(0, 6).map(p => (
-                      <div key={p.id} className="p-2 bg-slate-900/40 flex items-center justify-between gap-2">
-                        <span className="font-bold text-white truncate max-w-[220px]">
-                          {p.name}
-                        </span>
-                        <span className="text-[10px] text-slate-400 truncate font-mono">
-                          Hạng mục cũ: <span className="text-amber-300">{p.category || 'Chưa có'}</span>
+                return (
+                  <div className="border border-slate-700/60 rounded-2xl overflow-hidden">
+                    <div className="p-2.5 bg-slate-800/60 font-bold text-slate-300 text-[11px] border-b border-slate-700/60 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span>Danh sách Fanpage áp dụng:</span>
+                        <span className="text-[10px] text-emerald-400 font-mono">
+                          {targetPages.length} Fanpage ({pagesWithSources.length} có nguồn Web)
                         </span>
                       </div>
-                    ));
-                  })()}
-                  {(() => {
-                    const targetPages = bulkCategoryScope === 'bm'
-                      ? pages.filter(p => p.businessName === bulkCategoryBm && p.isActive !== false)
-                      : pages.filter(p => selectedPageIds.includes(p.id));
-                    if (targetPages.length > 6) {
-                      return (
-                        <div className="p-2 bg-slate-900/20 text-center text-slate-400 text-[10px] italic">
-                          ...và {targetPages.length - 6} Fanpage còn lại.
+                      {pagesWithoutSources.length > 0 && (
+                        <span className="text-[10px] text-amber-400 font-medium">
+                          ⚠️ {pagesWithoutSources.length} Page chưa gán nguồn
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="divide-y divide-slate-800/70 text-[11px] max-h-48 overflow-y-auto">
+                      {targetPages.length === 0 ? (
+                        <div className="p-4 text-center text-slate-400 text-xs">
+                          {bulkSyncScope === 'selected' ? 'Chưa có Fanpage nào được chọn' : 'Không tìm thấy Fanpage nào phù hợp'}
                         </div>
-                      );
-                    }
-                    return null;
-                  })()}
-                </div>
-              </div>
+                      ) : (
+                        targetPages.slice(0, 10).map(p => {
+                          const hasSource = p.sources && p.sources.length > 0;
+                          return (
+                            <div key={p.id} className="p-2.5 bg-slate-900/40 flex items-center justify-between gap-3">
+                              <div className="min-w-0 flex-1">
+                                <div className="font-bold text-white truncate flex items-center gap-1.5">
+                                  <span>{p.name}</span>
+                                  {p.businessName && (
+                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 font-normal">
+                                      {p.businessName}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-[10px] text-slate-400 truncate mt-0.5 font-mono">
+                                  ID: {p.fb_page_id || p.id}
+                                </div>
+                              </div>
+
+                              <div className="shrink-0 text-right">
+                                {hasSource ? (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                                    <span className="material-symbols-outlined text-[12px]">check_circle</span>
+                                    {p.sources.length} Nguồn Web
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-400 border border-amber-500/30" title="Chưa liên kết website WordPress nào">
+                                    <span className="material-symbols-outlined text-[12px]">warning</span>
+                                    Chưa có nguồn
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                      {targetPages.length > 10 && (
+                        <div className="p-2 bg-slate-900/20 text-center text-slate-400 text-[10px] italic">
+                          ...và {targetPages.length - 10} Fanpage còn lại.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
 
-            <div className="pt-3 border-t border-fb-surface-hover/50 flex items-center justify-end gap-2.5">
-              <button
-                onClick={() => setIsBulkCategoryModalOpen(false)}
-                disabled={isSubmittingBulkCategory}
-                className="px-4 py-2 bg-fb-surface-hover hover:bg-fb-surface-hover/80 text-fb-text font-bold rounded-xl text-xs transition-colors"
-              >
-                Hủy bỏ
-              </button>
-              <button
-                onClick={handleBulkUpdateCategorySubmit}
-                disabled={isSubmittingBulkCategory}
-                className="px-5 py-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:opacity-90 text-white font-bold rounded-xl text-xs flex items-center gap-2 shadow-lg shadow-cyan-500/25 transition-all disabled:opacity-50 cursor-pointer"
-              >
-                {isSubmittingBulkCategory ? (
-                  <span className="material-symbols-outlined animate-spin text-sm">sync</span>
-                ) : (
-                  <span className="material-symbols-outlined text-sm">check_circle</span>
-                )}
-                <span>Xác nhận cập nhật hạng mục</span>
-              </button>
-            </div>
+            {/** Modal Footer */}
+            {(() => {
+              let targetPages: any[] = [];
+              if (bulkSyncScope === 'bm') {
+                targetPages = pages.filter(p => p.businessName === bulkSyncBm && p.isActive !== false);
+              } else if (bulkSyncScope === 'all') {
+                targetPages = pages.filter(p => p.isActive !== false);
+              } else {
+                targetPages = pages.filter(p => selectedPageIds.includes(p.id));
+              }
+              const readyPages = targetPages.filter(p => p.sources && p.sources.length > 0);
+
+              return (
+                <div className="pt-3 border-t border-fb-surface-hover/50 flex items-center justify-between gap-2.5">
+                  <div className="text-xs text-slate-400">
+                    Sẵn sàng: <b className="text-emerald-400 font-bold">{readyPages.length}</b>/{targetPages.length} Fanpage
+                  </div>
+                  <div className="flex items-center gap-2.5">
+                    <button
+                      onClick={() => setIsBulkSyncModalOpen(false)}
+                      disabled={isSubmittingBulkSync}
+                      className="px-4 py-2 bg-fb-surface-hover hover:bg-fb-surface-hover/80 text-fb-text font-bold rounded-xl text-xs transition-colors"
+                    >
+                      Hủy bỏ
+                    </button>
+                    <button
+                      onClick={handleBulkSyncSubmit}
+                      disabled={isSubmittingBulkSync || targetPages.length === 0}
+                      className="px-5 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:opacity-90 text-white font-bold rounded-xl text-xs flex items-center gap-2 shadow-lg shadow-emerald-500/25 transition-all disabled:opacity-50 cursor-pointer"
+                    >
+                      {isSubmittingBulkSync ? (
+                        <span className="material-symbols-outlined animate-spin text-sm">sync</span>
+                      ) : (
+                        <span className="material-symbols-outlined text-sm">bolt</span>
+                      )}
+                      <span>
+                        {isSubmittingBulkSync
+                          ? 'Đang đồng bộ...'
+                          : `Đồng Bộ Ngay (${readyPages.length} Page)`}
+                      </span>
+                    </button>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         </div>
       )}

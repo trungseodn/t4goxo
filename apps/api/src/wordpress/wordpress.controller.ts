@@ -93,4 +93,12 @@ export class ZTTeamWordpressController {
   ) {
     return this.wordpressService.ztteam_syncPostsForSite(siteId, req.user.sub, body);
   }
+
+  @Post('bulk-sync-pages')
+  ztteam_bulkSyncPages(
+    @Body() body: { scope?: 'selected' | 'bm' | 'all'; pageIds?: string[]; bmName?: string; maxBatch?: number },
+    @Request() req: any
+  ) {
+    return this.wordpressService.ztteam_bulkSyncPages(req.user.sub, body);
+  }
 }

@@ -6,13 +6,14 @@ import basicSsl from '@vitejs/plugin-basic-ssl'
 export default defineConfig({
   plugins: [react(), basicSsl()],
   server: {
+    port: 5184,
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:3000',
+        target: process.env.VITE_API_PROXY_URL || 'http://127.0.0.1:3004',
         changeOrigin: true,
       },
       '/storage': {
-        target: 'http://127.0.0.1:3000',
+        target: process.env.VITE_API_PROXY_URL || 'http://127.0.0.1:3004',
         changeOrigin: true,
       },
     },

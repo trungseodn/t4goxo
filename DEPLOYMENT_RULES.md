@@ -1,7 +1,7 @@
 # BẢN QUY TẮC VẬN HÀNH & TRIỂN KHAI HỆ THỐNG (DEPLOYMENT & SAFETY RULES)
-**Dự án**: `t3.goxo.us`  
-**Mã nguồn mới**: https://github.com/trungseodn/t3goxo  
-**Mã nguồn gốc (Read-only)**: https://github.com/devzota/fb-bm-reel  
+**Dự án**: `t4.goxo.us`  
+**Mã nguồn**: https://github.com/trungseodn/t4goxo  
+**Mã nguồn gốc (Read-only)**: https://github.com/trungseodn/t3goxo  
 **Máy chủ VPS**: `169.58.210.160` (Thư mục dự án: `/root/ztreel-t3`)
 
 ---
@@ -37,12 +37,12 @@
 1. **Cách ly tuyệt đối mã nguồn gốc**:
    * Cấu hình cấm push (`push = DISABLE`) chỉ áp dụng **cục bộ trong thư mục `d:\projects\t3.goxo.us` trên máy này**.
    * **Không ảnh hưởng** đến các dự án khác hoặc máy tính khác của bạn; ở máy khác bạn vẫn push lên `devzota/fb-bm-reel` hoàn toàn bình thường.
-   * Trên máy này, thư mục này chỉ được push duy nhất vào repo mới `trungseodn/t3goxo`.
+   * Trên máy này, thư mục này chỉ được push duy nhất vào repo mới `trungseodn/t4goxo`.
 2. **Kênh phát triển chính thống**:
    * Mọi tính năng, sửa lỗi và cập nhật đều được push trực tiếp lên kho Git mới của bạn:  
-     👉 **`https://github.com/trungseodn/t3goxo`**
+     👉 **`https://github.com/trungseodn/t4goxo`**
 3. **Cập nhật Git trên VPS**:
-   * Chỉ cập nhật `origin` trên VPS sang `trungseodn/t3goxo` khi bạn xác nhận.
+   * Chỉ cập nhật `origin` trên VPS sang `trungseodn/t4goxo` khi bạn xác nhận.
    * Khi cập nhật, sử dụng chiến lược `git pull` an toàn (giữ nguyên các file untracked `.env` và các script render).
 
 ---
@@ -71,22 +71,22 @@
 ```
 [1. Tiếp nhận Yêu cầu] 
          ↓
-[2. Code & Test Local tại d:\projects\t3.goxo.us] 
+[2. Code & Test Local tại d:\projects\t4.goxo.us] 
          ↓
-[3. Commit & Push lên github.com/trungseodn/t3goxo] 
+[3. Commit & Push lên github.com/trungseodn/t4goxo] 
          ↓
 [4. Báo cáo thay đổi & Chờ Bạn Đồng Ý Deploy] 
          ↓ (Khi có lệnh "Đồng ý deploy")
-[5. Backup DB trên VPS -> Pull Code -> Rebuild Container ztreel3_* -> Verify t3.goxo.us]
+[5. Backup DB trên VPS -> Pull Code -> Rebuild Container ztreel3_* -> Verify t4.goxo.us]
 ```
 
 1. **Bước 1**: Nhận yêu cầu tính năng cụ thể từ bạn.
-2. **Bước 2**: Thực hiện code và test logic tại thư mục local `d:\projects\t3.goxo.us`.
-3. **Bước 3**: Commit rõ ràng và push lên `trungseodn/t3goxo`.
+2. **Bước 2**: Thực hiện code và test logic tại thư mục local `d:\projects\t4.goxo.us`.
+3. **Bước 3**: Commit rõ ràng và push lên `trungseodn/t4goxo`.
 4. **Bước 4**: Báo cáo chi tiết các file đã sửa/thêm và xin xác nhận triển khai từ bạn.
 5. **Bước 5**: Khi bạn đồng ý, kết nối SSH vào VPS:
    * Chạy script backup database.
-   * Pull commit mới nhất từ `trungseodn/t3goxo`.
+   * Pull commit mới nhất từ `trungseodn/t4goxo`.
    * Build lại service cần thiết (ví dụ: `docker compose -f docker-compose.t3.yml up -d --build --no-deps api` hoặc `web`).
    * Kiểm tra log container (`docker logs --tail 50 ztreel3_api_prod`) và test truy cập `https://t3.goxo.us`.
    * Báo cáo hoàn tất.

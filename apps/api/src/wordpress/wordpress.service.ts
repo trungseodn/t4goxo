@@ -1,12 +1,17 @@
-import { Injectable, Logger, HttpException, HttpStatus } from '@nestjs/common';
+import { Injectable, Logger, HttpException, HttpStatus, Inject, forwardRef } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { PrismaService } from '../prisma/prisma.service';
 import { firstValueFrom } from 'rxjs';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
+import axios from 'axios';
+import sharp from 'sharp';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { ZTTeamHtmlCleanerService } from './html-cleaner.service';
-import { ztteam_getStorageRoot } from '../common/ztteam_storage.util';
+import { ztteam_getStorageRoot, ztteam_getImagesPath } from '../common/ztteam_storage.util';
+import { ztteam_getNewsComment, ZTTEAM_NEWS_CAPTION_CTA } from '../common/ztteam_news_comment.util';
+import { ZTTeamHookVideoService } from '../media/hook-video.service';
 
 @Injectable()
 export class ZTTeamWordpressService {
@@ -17,6 +22,9 @@ export class ZTTeamWordpressService {
     private readonly prisma: PrismaService,
     private readonly httpService: HttpService,
     private readonly htmlCleaner: ZTTeamHtmlCleanerService,
+    @Inject(forwardRef(() => ZTTeamHookVideoService))
+    private readonly hookVideoService: ZTTeamHookVideoService,
+    private readonly eventEmitter: EventEmitter2,
   ) {
     const secret = process.env.JWT_SECRET || 'default-secret-key-32-chars-long!';
     this.encryptionKey = crypto.scryptSync(secret, 'salt', 32);
@@ -596,5 +604,365 @@ export class ZTTeamWordpressService {
       this.logger.error('Failed to get sample post from WP', e.response?.data || e.message);
       return null;
     }
+  }
+
+  /**
+   * ZTTeam: Tự động đồng bộ bài viết có sẵn từ Website WordPress vào Fanpage để Render Video
+   * TUYỆT ĐỐI không gọi SangTao.ai, sử dụng trực tiếp ảnh chuẩn đã có sẵn của bài viết trên WordPress
+   */
+  async ztteam_syncPostsForPage(
+    pageId: string,
+    options?: { maxBatch?: number; forceSync?: boolean; userId?: string }
+  ): Promise<{ success: boolean; count: number; message: string }> {
+    const page = await this.prisma.ztteam_pages.findUnique({
+      where: { id: pageId },
+      include: { sources: true, fb_account: true }
+    });
+
+    if (!page || !page.is_active) {
+      return { success: false, count: 0, message: 'Fanpage không tồn tại hoặc đang bị tắt' };
+    }
+
+    const activeSources = page.sources.filter(s => s.is_active && s.target_site_id);
+    if (activeSources.length === 0) {
+      return { success: false, count: 0, message: 'Fanpage chưa được liên kết với Website WordPress nào (Vui lòng chọn nguồn trong Cài đặt Fanpage)' };
+    }
+
+    const batchSize = options?.maxBatch || page.auto_scan_batch_size || 3;
+    const maxAgeDays = page.auto_max_post_age_days || 30;
+    const queueLimit = page.auto_queue_limit || 10;
+    const now = new Date();
+
+    /** Kiểm tra số lượng bài đang chờ xuất bản trong hàng đợi của Fanpage này */
+    const currentQueueCount = await this.prisma.ztteam_images.count({
+      where: {
+        page_id: page.id,
+        is_posted: false,
+      }
+    });
+
+    if (currentQueueCount >= queueLimit && !options?.forceSync) {
+      this.logger.log(`Hàng đợi của Fanpage "${page.name}" đã đạt giới hạn (${currentQueueCount}/${queueLimit}). Bỏ qua lượt quét này.`);
+      return { success: true, count: 0, message: `Hàng đợi đã đạt giới hạn (${currentQueueCount}/${queueLimit} bài). Vui lòng đợi các bài cũ xuất bản.` };
+    }
+
+    let totalSynced = 0;
+
+    for (const source of activeSources) {
+      if (totalSynced >= batchSize) break;
+
+      const site = await this.prisma.ztteam_target_sites.findUnique({
+        where: { id: source.target_site_id }
+      });
+      if (!site || site.status !== 'active') continue;
+
+      try {
+        const ownerUserId = options?.userId || page.fb_account?.owner_user_id || site.owner_user_id;
+        const posts = await this.ztteam_getPosts(
+          source.target_site_id,
+          ownerUserId,
+          source.target_category_id || undefined,
+          source.target_tags || undefined
+        );
+
+        if (!posts || posts.length === 0) continue;
+
+        /** Sắp xếp bài cũ xuất bản trước (FIFO) */
+        const reversedPosts = [...posts].reverse();
+
+        for (const post of reversedPosts) {
+          if (totalSynced >= batchSize) break;
+          if (currentQueueCount + totalSynced >= queueLimit && !options?.forceSync) break;
+
+          /** 1. Kiểm tra xem bài viết đã từng đưa vào Fanpage này chưa */
+          const alreadyInHistory = await this.prisma.ztteam_image_history.findUnique({
+            where: {
+              page_id_wp_post_id: {
+                page_id: page.id,
+                wp_post_id: post.id.toString(),
+              }
+            }
+          });
+          if (alreadyInHistory) continue;
+
+          /** 2. Kiểm tra tuổi của bài viết */
+          if (maxAgeDays > 0 && post.date) {
+            const postDate = new Date(post.date);
+            const diffDays = Math.ceil(Math.abs(now.getTime() - postDate.getTime()) / (1000 * 60 * 60 * 24));
+            if (diffDays > maxAgeDays && !options?.forceSync) {
+              continue;
+            }
+          }
+
+          /** 3. Tạo ID và thư mục lưu trữ bài viết */
+          const newImageId = crypto.randomUUID();
+          const targetDir = ztteam_getImagesPath(newImageId);
+          fs.mkdirSync(targetDir, { recursive: true });
+
+          /** 4. Tải ảnh chuẩn có sẵn của bài viết từ WordPress (KHÔNG render AI tạo ảnh) */
+          let localImageUrl = '';
+          if (post.imageUrl) {
+            try {
+              let imgUrl = post.imageUrl;
+              if (imgUrl.startsWith('//')) imgUrl = 'https:' + imgUrl;
+              else if (imgUrl.startsWith('/')) imgUrl = site.wp_url.replace(/\/$/, '') + imgUrl;
+
+              const imgRes = await axios.get(imgUrl, {
+                responseType: 'arraybuffer',
+                timeout: 15000,
+                headers: {
+                  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                  'Referer': site.wp_url,
+                }
+              });
+
+              const buf = Buffer.from(imgRes.data);
+              const outPath = path.join(targetDir, 'output.png');
+              const origPath = path.join(targetDir, 'source_original.png');
+
+              try {
+                await sharp(buf).png().toFile(outPath);
+              } catch {
+                fs.writeFileSync(outPath, buf);
+              }
+              fs.writeFileSync(origPath, buf);
+
+              localImageUrl = `/storage/images/${newImageId}/output.png`;
+            } catch (dlErr: any) {
+              this.logger.warn(`Không thể tải ảnh chuẩn từ WP (${post.imageUrl}): ${dlErr.message}`);
+            }
+          }
+
+          if (!localImageUrl) {
+            this.logger.warn(`Bài viết #${post.id} ("${post.title}") không có ảnh đại diện khả dụng, bỏ qua để đảm bảo chất lượng video.`);
+            continue;
+          }
+
+          /** 5. Chuẩn bị Caption và First Comment chuẩn News Publisher */
+          const titleUpper = (post.title || '').trim().toUpperCase();
+          const rawExcerpt = post.excerpt || post.content || '';
+          const cleanSnippet = rawExcerpt.substring(0, 500).trim();
+          let fanpageCaption = `${titleUpper}\n\n${cleanSnippet}\n\n${ZTTEAM_NEWS_CAPTION_CTA}`;
+          if (page.add_link_to_caption) {
+            fanpageCaption += `\n\nFull story: ${post.link}`;
+          }
+          const firstCommentText = ztteam_getNewsComment(post.link);
+
+          const shouldRenderVideo = page.post_format === 'reel' || page.post_format === 'mixed';
+
+          /** 6. Tạo bản ghi bài viết trong database */
+          const imgRecord = await this.prisma.ztteam_images.create({
+            data: {
+              id: newImageId,
+              page_id: page.id,
+              wp_post_id: post.id.toString(),
+              wp_post_title: post.title || 'Bài viết',
+              wp_post_url: post.link,
+              template_id: 'wp_standard_image',
+              image_url: localImageUrl,
+              ai_caption: fanpageCaption,
+              ai_first_comment: firstCommentText,
+              comment_step: 0,
+              status: 'COMPLETED', /** Ảnh đã chuẩn, sẵn sàng! */
+              video_status: shouldRenderVideo ? 'PENDING' : 'NONE',
+              video_engine: page.video_engine || 'hook_image',
+            }
+          });
+
+          /** 7. Lưu vào lịch sử để không bao giờ lấy lại bài này */
+          await this.prisma.ztteam_image_history.upsert({
+            where: {
+              page_id_wp_post_id: {
+                page_id: page.id,
+                wp_post_id: post.id.toString(),
+              }
+            },
+            create: {
+              page_id: page.id,
+              wp_post_id: post.id.toString(),
+            },
+            update: {},
+          });
+
+          this.eventEmitter.emit('image.updated', imgRecord);
+
+          /** 8. Kích hoạt Render Hook Video ngay lập tức */
+          if (shouldRenderVideo) {
+            this.hookVideoService.ztteam_renderHookVideo(newImageId).catch(err => {
+              this.logger.error(`Render video thất bại cho bài ${newImageId}: ${err.message}`);
+            });
+          }
+
+          totalSynced++;
+          this.logger.log(`[WP Auto-Sync] Đã đồng bộ thành công bài "${post.title}" (ID: ${post.id}) vào Fanpage "${page.name}"`);
+        }
+      } catch (siteErr: any) {
+        this.logger.error(`Lỗi quét bài từ website ${site.wp_url} cho Fanpage ${page.name}: ${siteErr.message}`);
+      }
+    }
+
+    /** Cập nhật thời điểm quét mới nhất của Fanpage */
+    await this.prisma.ztteam_pages.update({
+      where: { id: page.id },
+      data: { last_auto_scan_at: new Date() }
+    });
+
+    return {
+      success: true,
+      count: totalSynced,
+      message: totalSynced > 0
+        ? `Đã đồng bộ thành công ${totalSynced} bài viết từ Website vào hàng đợi Fanpage!`
+        : 'Không tìm thấy bài viết mới nào cần đồng bộ.'
+    };
+  }
+
+  /**
+   * ZTTeam: Quét toàn bộ Fanpage đang bật tính năng Tự động quét bài viết từ Website
+   */
+  async ztteam_syncAllActivePages(): Promise<number> {
+    const pages = await this.prisma.ztteam_pages.findMany({
+      where: {
+        is_active: true,
+        auto_create_enabled: true,
+      },
+      include: { sources: true },
+      orderBy: { last_auto_scan_at: 'asc' },
+      take: 50,
+    });
+
+    let processedPages = 0;
+
+    for (const page of pages) {
+      if (!page.sources || page.sources.length === 0) continue;
+
+      const now = new Date();
+      const lastScan = page.last_auto_scan_at ? new Date(page.last_auto_scan_at) : null;
+      const intervalHours = page.auto_scan_interval_hours || 2;
+      if (lastScan) {
+        const hoursSince = (now.getTime() - lastScan.getTime()) / (1000 * 60 * 60);
+        if (hoursSince < intervalHours) continue;
+      }
+
+      try {
+        await this.ztteam_syncPostsForPage(page.id);
+        processedPages++;
+      } catch (err: any) {
+        this.logger.error(`Tự động đồng bộ lỗi cho Fanpage ${page.id}: ${err.message}`);
+      }
+    }
+
+    return processedPages;
+  }
+
+  /**
+   * ZTTeam: Đồng bộ bài viết từ 1 Website cụ thể vào Kho Đăng Thủ Công (page_id: null)
+   */
+  async ztteam_syncPostsForSite(
+    siteId: string,
+    userId: string,
+    options?: { categoryId?: string; targetTags?: string; maxBatch?: number }
+  ): Promise<{ success: boolean; count: number; message: string }> {
+    const site = await this.prisma.ztteam_target_sites.findFirst({
+      where: { id: siteId, owner_user_id: userId }
+    }) || await this.prisma.ztteam_target_sites.findUnique({ where: { id: siteId } });
+
+    if (!site) {
+      throw new HttpException('Không tìm thấy Website WordPress', HttpStatus.NOT_FOUND);
+    }
+
+    const posts = await this.ztteam_getPosts(site.id, userId, options?.categoryId, options?.targetTags);
+    if (!posts || posts.length === 0) {
+      return { success: true, count: 0, message: 'Website không có bài viết nào trong chuyên mục này' };
+    }
+
+    const batchSize = options?.maxBatch || 5;
+    let totalSynced = 0;
+
+    for (const post of posts) {
+      if (totalSynced >= batchSize) break;
+
+      /** Kiểm tra đã có bài này trong hệ thống chưa */
+      const existing = await this.prisma.ztteam_images.findFirst({
+        where: { wp_post_id: post.id.toString() }
+      });
+      if (existing) continue;
+
+      const newImageId = crypto.randomUUID();
+      const targetDir = ztteam_getImagesPath(newImageId);
+      fs.mkdirSync(targetDir, { recursive: true });
+
+      let localImageUrl = '';
+      if (post.imageUrl) {
+        try {
+          let imgUrl = post.imageUrl;
+          if (imgUrl.startsWith('//')) imgUrl = 'https:' + imgUrl;
+          else if (imgUrl.startsWith('/')) imgUrl = site.wp_url.replace(/\/$/, '') + imgUrl;
+
+          const imgRes = await axios.get(imgUrl, {
+            responseType: 'arraybuffer',
+            timeout: 15000,
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+              'Referer': site.wp_url,
+            }
+          });
+
+          const buf = Buffer.from(imgRes.data);
+          const outPath = path.join(targetDir, 'output.png');
+          const origPath = path.join(targetDir, 'source_original.png');
+
+          try {
+            await sharp(buf).png().toFile(outPath);
+          } catch {
+            fs.writeFileSync(outPath, buf);
+          }
+          fs.writeFileSync(origPath, buf);
+
+          localImageUrl = `/storage/images/${newImageId}/output.png`;
+        } catch (dlErr: any) {
+          this.logger.warn(`Không thể tải ảnh từ WP (${post.imageUrl}): ${dlErr.message}`);
+        }
+      }
+
+      if (!localImageUrl) continue;
+
+      const titleUpper = (post.title || '').trim().toUpperCase();
+      const rawExcerpt = post.excerpt || post.content || '';
+      const cleanSnippet = rawExcerpt.substring(0, 500).trim();
+      const fanpageCaption = `${titleUpper}\n\n${cleanSnippet}\n\n${ZTTEAM_NEWS_CAPTION_CTA}`;
+      const firstCommentText = ztteam_getNewsComment(post.link);
+
+      const imgRecord = await this.prisma.ztteam_images.create({
+        data: {
+          id: newImageId,
+          page_id: null, /** Kho Đăng Thủ Công */
+          wp_post_id: post.id.toString(),
+          wp_post_title: post.title || 'Bài viết',
+          wp_post_url: post.link,
+          template_id: 'wp_standard_image',
+          image_url: localImageUrl,
+          ai_caption: fanpageCaption,
+          ai_first_comment: firstCommentText,
+          comment_step: 0,
+          status: 'COMPLETED',
+          video_status: 'PENDING',
+          video_engine: 'hook_image',
+        }
+      });
+
+      this.eventEmitter.emit('image.updated', imgRecord);
+
+      this.hookVideoService.ztteam_renderHookVideo(newImageId).catch(err => {
+        this.logger.error(`Render video lỗi cho bài studio ${newImageId}: ${err.message}`);
+      });
+
+      totalSynced++;
+    }
+
+    return {
+      success: true,
+      count: totalSynced,
+      message: `Đã đồng bộ thành công ${totalSynced} bài viết vào Kho Đăng Thủ Công!`
+    };
   }
 }

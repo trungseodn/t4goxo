@@ -71,4 +71,26 @@ export class ZTTeamWordpressController {
   ) {
     return this.wordpressService.ztteam_getSamplePost(siteId, req.user.sub, categoryId, targetTags);
   }
+
+  @Post('sync-page-posts/:pageId')
+  ztteam_syncPagePosts(
+    @Param('pageId') pageId: string,
+    @Body() body: { maxBatch?: number },
+    @Request() req: any
+  ) {
+    return this.wordpressService.ztteam_syncPostsForPage(pageId, {
+      maxBatch: body?.maxBatch,
+      forceSync: true,
+      userId: req.user.sub
+    });
+  }
+
+  @Post('sites/:siteId/sync-posts')
+  ztteam_syncSitePosts(
+    @Param('siteId') siteId: string,
+    @Body() body: { categoryId?: string; targetTags?: string; maxBatch?: number },
+    @Request() req: any
+  ) {
+    return this.wordpressService.ztteam_syncPostsForSite(siteId, req.user.sub, body);
+  }
 }

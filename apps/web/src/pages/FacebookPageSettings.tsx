@@ -79,6 +79,7 @@ export default function FacebookPageSettings() {
   const [imagesQueue, setImagesQueue] = useState<any[]>([]);
   const [isLoadingQueue, setIsLoadingQueue] = useState(false);
   const [isPosting, setIsPosting] = useState<Record<string, boolean>>({});
+  const [isSyncingWp, setIsSyncingWp] = useState(false);
 
   /** Branding State: Upload Avatar & Cover */
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
@@ -339,6 +340,30 @@ export default function FacebookPageSettings() {
     }
   };
 
+  /** Quét và đồng bộ bài viết trực tiếp từ Website WordPress ngay lập tức */
+  const ztteam_handleSyncWpNow = async () => {
+    if (!id) return;
+    const hasActiveSource = sources && sources.some((s: any) => s.target_site_id && s.is_active);
+    if (!hasActiveSource) {
+      ztteam_showToast('Vui lòng thêm và bật ít nhất 1 nguồn Website WordPress cho Fanpage này', 'warning');
+      return;
+    }
+    try {
+      setIsSyncingWp(true);
+      const res = await api.post(`/wordpress/sync-page-posts/${id}`);
+      if (res.data?.count > 0) {
+        ztteam_showToast(res.data.message || `Đã đồng bộ thành công ${res.data.count} bài viết từ Web vào hàng đợi!`, 'success');
+        ztteam_loadQueue();
+      } else {
+        ztteam_showToast(res.data?.message || 'Không tìm thấy bài viết mới nào cần đồng bộ.', 'info');
+      }
+    } catch (err: any) {
+      ztteam_showToast(err.response?.data?.message || err.message || 'Lỗi khi đồng bộ bài viết', 'error');
+    } finally {
+      setIsSyncingWp(false);
+    }
+  };
+
   /** Save Settings */
   const ztteam_handleSave = async () => {
     try {
@@ -358,7 +383,11 @@ export default function FacebookPageSettings() {
         schedule_mode: scheduleMode,
         schedule_fixed_times: scheduleFixedTimes,
         schedule_immediate_gap_minutes: scheduleImmediateGap,
-        auto_create_enabled: false,
+        auto_create_enabled: autoCreateEnabled,
+        auto_scan_interval_hours: Number(autoScanInterval) || 2,
+        auto_scan_batch_size: Number(autoScanBatchSize) || 1,
+        auto_queue_limit: Number(autoQueueLimit) || 3,
+        auto_max_post_age_days: Number(autoMaxPostAgeDays) || 7,
         sources
       });
       ztteam_showToast('Đã lưu cấu hình thành công', 'success');
@@ -1122,7 +1151,7 @@ export default function FacebookPageSettings() {
 
             {/** Card 2: Nguồn Website WordPress Liên Kết */}
             <div className="bg-fb-surface rounded-2xl shadow-lg border border-fb-surface-hover/50 p-6 space-y-5">
-              <div className="flex items-center justify-between pb-3 border-b border-fb-surface-hover/50">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-fb-surface-hover/50 gap-3">
                 <div className="flex items-center gap-2">
                   <span className="material-symbols-outlined text-amber-500 text-[22px]">language</span>
                   <div>
@@ -1130,17 +1159,33 @@ export default function FacebookPageSettings() {
                     <p className="text-[11px] text-fb-text-muted mt-0.5">Liên kết Fanpage với Website WP và Chuyên mục bài viết tương ứng</p>
                   </div>
                 </div>
-                <button
-                  onClick={() => setSources([...sources, { target_site_id: '', target_category_id: '', target_tags: '', is_active: true }])}
-                  className="px-3 py-1.5 bg-fb-blue/15 text-fb-blue hover:bg-fb-blue/25 rounded-lg text-xs font-bold transition-colors flex items-center gap-1 shrink-0"
-                >
-                  <span className="material-symbols-outlined text-[14px]">add</span> Thêm nguồn
-                </button>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={ztteam_handleSyncWpNow}
+                    disabled={isSyncingWp}
+                    className="px-3 py-1.5 bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25 border border-emerald-500/30 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 disabled:opacity-50"
+                    title="Quét ngay các bài viết mới từ Website WordPress để tạo video vào hàng đợi"
+                  >
+                    {isSyncingWp ? (
+                      <span className="material-symbols-outlined text-[16px] animate-spin">sync</span>
+                    ) : (
+                      <span className="material-symbols-outlined text-[16px]">bolt</span>
+                    )}
+                    <span>{isSyncingWp ? 'Đang đồng bộ...' : 'Đồng bộ từ Web ngay'}</span>
+                  </button>
+                  <button
+                    onClick={() => setSources([...sources, { target_site_id: '', target_category_id: '', target_tags: '', is_active: true }])}
+                    className="px-3 py-1.5 bg-fb-blue/15 text-fb-blue hover:bg-fb-blue/25 rounded-lg text-xs font-bold transition-colors flex items-center gap-1 shrink-0"
+                  >
+                    <span className="material-symbols-outlined text-[14px]">add</span> Thêm nguồn
+                  </button>
+                </div>
               </div>
 
               <div className="bg-fb-surface-hover/20 p-3 rounded-xl border border-fb-surface-hover/40 text-[11px] text-fb-text-muted leading-relaxed">
                 <span className="material-symbols-outlined text-[14px] text-amber-400 align-middle mr-1">info</span>
-                Khi bot cào bài viết mới từ menu <strong>Website (/crawl-sources)</strong> vào Website và Chuyên mục này, bài viết kèm ảnh AI 2K sẽ tự động đưa vào hàng đợi của Fanpage này để xuất bản. Một Website có thể dùng cho nhiều Fanpage khác nhau theo từng chuyên mục riêng.
+                Hệ thống sẽ lấy các bài viết có sẵn trên Website WordPress theo Chuyên mục đã cấu hình, sử dụng trực tiếp ảnh đại diện chuẩn sẵn có để render video Reel và đăng lên Fanpage theo lịch trình.
               </div>
 
               <div className="space-y-3">
@@ -1219,6 +1264,99 @@ export default function FacebookPageSettings() {
                   <p className="text-xs text-fb-text-muted italic text-center py-4 bg-fb-surface-hover/20 rounded-xl border border-dashed border-fb-surface-hover/50">
                     Chưa cấu hình nguồn Website WordPress. Vui lòng bấm "Thêm nguồn" ở trên để chọn Website và Chuyên mục cho Fanpage.
                   </p>
+                )}
+              </div>
+
+              {/** Cấu hình Tự Động Quét & Tạo Video từ Web */}
+              <div className="pt-4 border-t border-fb-surface-hover/50 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-bold text-fb-text">Tự động quét bài viết từ Website</span>
+                      <span className="px-2 py-0.5 bg-blue-500/15 text-blue-400 border border-blue-500/20 rounded-full text-[10px] font-bold">
+                        Auto WP Sync
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-fb-text-muted">
+                      Hệ thống tự động quét bài viết có sẵn trên Website, dùng ảnh chuẩn sẵn có để render video Reel và xếp vào hàng đợi xuất bản.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setAutoCreateEnabled(!autoCreateEnabled)}
+                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                      autoCreateEnabled ? 'bg-emerald-500' : 'bg-black/30 shadow-inner border border-white/5'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                        autoCreateEnabled ? 'translate-x-6' : 'translate-x-1'
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                {autoCreateEnabled && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 bg-fb-surface-hover/30 p-4 rounded-xl border border-fb-surface-hover/40">
+                    <div>
+                      <label className="block text-[10px] font-bold text-fb-text-muted uppercase mb-1">Tần suất quét</label>
+                      <CustomDropdown
+                        value={String(autoScanInterval)}
+                        onChange={v => setAutoScanInterval(Number(v))}
+                        options={[
+                          { value: '1', label: 'Mỗi 1 giờ' },
+                          { value: '2', label: 'Mỗi 2 giờ (Khuyến nghị)' },
+                          { value: '4', label: 'Mỗi 4 giờ' },
+                          { value: '6', label: 'Mỗi 6 giờ' },
+                          { value: '12', label: 'Mỗi 12 giờ' },
+                          { value: '24', label: 'Mỗi 24 giờ' },
+                        ]}
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-fb-text-muted uppercase mb-1">Số bài lấy mỗi lần</label>
+                      <CustomDropdown
+                        value={String(autoScanBatchSize)}
+                        onChange={v => setAutoScanBatchSize(Number(v))}
+                        options={[
+                          { value: '1', label: '1 bài / lượt' },
+                          { value: '2', label: '2 bài / lượt' },
+                          { value: '3', label: '3 bài / lượt (Khuyến nghị)' },
+                          { value: '5', label: '5 bài / lượt' },
+                        ]}
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-fb-text-muted uppercase mb-1">Giới hạn hàng đợi tối đa</label>
+                      <CustomDropdown
+                        value={String(autoQueueLimit)}
+                        onChange={v => setAutoQueueLimit(Number(v))}
+                        options={[
+                          { value: '3', label: 'Tối đa 3 bài chờ' },
+                          { value: '5', label: 'Tối đa 5 bài chờ (Khuyến nghị)' },
+                          { value: '10', label: 'Tối đa 10 bài chờ' },
+                          { value: '20', label: 'Tối đa 20 bài chờ' },
+                        ]}
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-fb-text-muted uppercase mb-1">Chỉ lấy bài trong vòng</label>
+                      <CustomDropdown
+                        value={String(autoMaxPostAgeDays)}
+                        onChange={v => setAutoMaxPostAgeDays(Number(v))}
+                        options={[
+                          { value: '1', label: 'Trong vòng 1 ngày qua' },
+                          { value: '3', label: 'Trong vòng 3 ngày qua' },
+                          { value: '7', label: 'Trong vòng 7 ngày qua' },
+                          { value: '30', label: 'Trong vòng 30 ngày qua' },
+                          { value: '0', label: 'Tất cả (Không giới hạn ngày)' },
+                        ]}
+                      />
+                    </div>
+                  </div>
                 )}
               </div>
             </div>

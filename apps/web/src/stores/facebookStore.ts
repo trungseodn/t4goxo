@@ -73,6 +73,8 @@ declare global {
   }
 }
 
+const ztteamPageReportsCache: Map<string, { time: number; data: any }> = new Map();
+
 export const useZTTeamFacebookStore = create<ZTTeamFacebookState>((set, get) => ({
   isConnected: false,
   fbAccountId: null,
@@ -268,8 +270,13 @@ export const useZTTeamFacebookStore = create<ZTTeamFacebookState>((set, get) => 
   },
 
   ztteam_getPageReport: async (pageId: string) => {
+    const cached = ztteamPageReportsCache.get(pageId);
+    if (cached && Date.now() - cached.time < 5 * 60 * 1000) {
+      return cached.data;
+    }
     try {
       const response = await api.get(`/facebook/pages/${pageId}/report`);
+      ztteamPageReportsCache.set(pageId, { time: Date.now(), data: response.data });
       return response.data;
     } catch (error: any) {
       console.error('Error fetching page report', error);

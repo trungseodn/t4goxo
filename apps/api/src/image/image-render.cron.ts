@@ -24,11 +24,10 @@ export class ZTTeamImageRenderCron implements OnApplicationBootstrap {
       this.logger.log('WP Auto-Sync Cron is disabled via ENABLE_AUTO_CRON=false');
       return;
     }
-    this.logger.log('Application started, triggering initial WP Auto-Sync Cron...');
-    this.ztteam_handleCron();
+    this.logger.log('WP Auto-Sync Cron initialized and scheduled to run every 5 minutes.');
   }
 
-  @Cron(CronExpression.EVERY_MINUTE)
+  @Cron(CronExpression.EVERY_5_MINUTES)
   async ztteam_handleCron() {
     if (process.env.ENABLE_AUTO_CRON === 'false') {
       return;

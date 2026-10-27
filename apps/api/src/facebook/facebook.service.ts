@@ -614,9 +614,12 @@ export class ZTTeamFacebookService {
 
     const accountIds = fbAccounts.map(a => a.id);
 
+    const user = await this.prisma.ztteam_users.findUnique({ where: { id: userId } });
+    const isAdmin = !user || user.role === 'ADMIN';
+
     /** ZTTeam: Nạp danh mục website WordPress để map sang domain hiển thị trên Card Fanpage */
     const targetSites = await this.prisma.ztteam_target_sites.findMany({
-      where: { owner_user_id: userId },
+      where: isAdmin ? {} : { owner_user_id: userId },
       select: { id: true, wp_url: true }
     });
     const targetSiteMap = new Map<string, string>();
@@ -709,6 +712,14 @@ export class ZTTeamFacebookService {
         sourcesCount: activeSources.length,
         sourceWebs,
         primarySourceWeb: sourceWebs[0] || null,
+        sources: activeSources.map(s => ({
+          id: s.id,
+          target_site_id: s.target_site_id,
+          target_category_id: s.target_category_id,
+          target_tags: s.target_tags,
+          is_active: s.is_active,
+          siteUrl: targetSiteMap.get(s.target_site_id) || '',
+        })),
         lastPublishTime: times.lastPublishTime,
         lastPostTitle: times.lastPostTitle,
         pendingImagesCount,

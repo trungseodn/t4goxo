@@ -919,7 +919,7 @@ export default function FacebookPages() {
       targetPages = pages.filter(p => selectedPageIds.includes(p.id));
     }
 
-    const pagesWithSources = targetPages.filter(p => p.sources && p.sources.length > 0);
+    const pagesWithSources = targetPages.filter(p => (p.sourcesCount && p.sourcesCount > 0) || (p.sources && p.sources.length > 0));
 
     const confirm = await ztteam_showConfirm(
       'Xác nhận Đồng bộ từ Web hàng loạt',
@@ -2417,8 +2417,8 @@ export default function FacebookPages() {
                   targetPages = pages.filter(p => selectedPageIds.includes(p.id));
                 }
 
-                const pagesWithSources = targetPages.filter(p => p.sources && p.sources.length > 0);
-                const pagesWithoutSources = targetPages.filter(p => !p.sources || p.sources.length === 0);
+                const pagesWithSources = targetPages.filter(p => (p.sourcesCount && p.sourcesCount > 0) || (p.sources && p.sources.length > 0));
+                const pagesWithoutSources = targetPages.filter(p => (!p.sourcesCount || p.sourcesCount === 0) && (!p.sources || p.sources.length === 0));
 
                 return (
                   <div className="border border-slate-700/60 rounded-2xl overflow-hidden">
@@ -2443,7 +2443,9 @@ export default function FacebookPages() {
                         </div>
                       ) : (
                         targetPages.slice(0, 10).map(p => {
-                          const hasSource = p.sources && p.sources.length > 0;
+                          const hasSource = (p.sourcesCount && p.sourcesCount > 0) || (p.sources && p.sources.length > 0);
+                          const sourceCount = p.sourcesCount || p.sources?.length || 0;
+                          const webDisplay = p.primarySourceWeb || (p.sourceWebs && p.sourceWebs[0]) || (sourceCount > 0 ? `${sourceCount} Nguồn Web` : '');
                           return (
                             <div key={p.id} className="p-2.5 bg-slate-900/40 flex items-center justify-between gap-3">
                               <div className="min-w-0 flex-1">
@@ -2462,9 +2464,9 @@ export default function FacebookPages() {
 
                               <div className="shrink-0 text-right">
                                 {hasSource ? (
-                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30" title={webDisplay}>
                                     <span className="material-symbols-outlined text-[12px]">check_circle</span>
-                                    {p.sources.length} Nguồn Web
+                                    {webDisplay}
                                   </span>
                                 ) : (
                                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-400 border border-amber-500/30" title="Chưa liên kết website WordPress nào">
@@ -2498,7 +2500,7 @@ export default function FacebookPages() {
               } else {
                 targetPages = pages.filter(p => selectedPageIds.includes(p.id));
               }
-              const readyPages = targetPages.filter(p => p.sources && p.sources.length > 0);
+              const readyPages = targetPages.filter(p => (p.sourcesCount && p.sourcesCount > 0) || (p.sources && p.sources.length > 0));
 
               return (
                 <div className="pt-3 border-t border-fb-surface-hover/50 flex items-center justify-between gap-2.5">

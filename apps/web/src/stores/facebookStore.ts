@@ -29,6 +29,9 @@ export interface ZTTeamFanpage {
   defaultReelTemplateName?: string | null;
   nextVideoTitle?: string | null;
   sourcesCount?: number;
+  sources?: any[];
+  sourceWebs?: string[];
+  primarySourceWeb?: string | null;
   pendingImagesCount?: number;
   pendingReelsCount?: number;
   totalPendingCount?: number;

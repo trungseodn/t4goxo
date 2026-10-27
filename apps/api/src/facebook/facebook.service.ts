@@ -2615,43 +2615,25 @@ export class ZTTeamFacebookService {
     const avatarFilePath = await resolveLocalPath(data.avatarLocalPath, data.avatarUrl);
     if (avatarFilePath) {
       try {
-        this.logger.log(`Đang tải ảnh Avatar lên Facebook cho Page ${page.name}...`);
-        /** Bước 1a: Upload ảnh đại diện vào photos của Page với published=false để lấy photoId */
+        this.logger.log(`Đang tải ảnh Avatar trực tiếp lên Facebook cho Page ${page.name} (${page.fb_page_id})...`);
         const avatarUploadForm = new FormData();
         avatarUploadForm.append('access_token', page.page_token_encrypted);
-        avatarUploadForm.append('published', 'false');
         avatarUploadForm.append('source', fs.createReadStream(avatarFilePath));
 
-        const uploadRes = await firstValueFrom(
+        const avatarRes = await firstValueFrom(
           this.httpService.post(
-            `https://graph.facebook.com/${this.API_VERSION}/${page.fb_page_id}/photos`,
+            `https://graph.facebook.com/${this.API_VERSION}/${page.fb_page_id}/picture`,
             avatarUploadForm,
             { headers: avatarUploadForm.getHeaders(), maxBodyLength: Infinity }
           )
         );
 
-        const avatarPhotoId = uploadRes.data?.id;
-        if (!avatarPhotoId) {
-          throw new Error('Meta không trả về Photo ID của ảnh đại diện');
-        }
-
-        /** Bước 1b: Gán photoId làm Profile Picture qua API /{page-id}/picture */
-        await firstValueFrom(
-          this.httpService.post(
-            `https://graph.facebook.com/${this.API_VERSION}/${page.fb_page_id}/picture`,
-            null,
-            {
-              params: {
-                photo: avatarPhotoId,
-                access_token: page.page_token_encrypted
-              }
-            }
-          )
-        );
+        this.logger.log(`[Branding] Đổi Avatar thành công cho Page ${page.name}: ${JSON.stringify(avatarRes.data)}`);
         updatedAvatar = true;
       } catch (err: any) {
-        this.logger.error(`Lỗi cập nhật Avatar trên Facebook: ${err.response?.data?.error?.message || err.message}`);
-        throw new BadRequestException(`Lỗi cập nhật Avatar Facebook: ${err.response?.data?.error?.message || err.message}`);
+        const errorDetail = err.response?.data?.error?.message || err.message;
+        this.logger.error(`Lỗi cập nhật Avatar trên Facebook: ${errorDetail}`);
+        throw new BadRequestException(`Lỗi cập nhật Avatar Facebook: ${errorDetail}`);
       }
     }
 
@@ -3343,8 +3325,11 @@ export class ZTTeamFacebookService {
       success: true,
       job: {
         id: pendingJob.id,
+        pageId: pendingJob.id,
         fbPageId: pendingJob.fb_page_id,
+        pageFbId: pendingJob.fb_page_id,
         name: pendingJob.name,
+        pageName: pendingJob.name,
         category: pendingJob.category,
         businessName: pendingJob.fb_account?.business_name,
         theme: (pendingJob as any).branding_theme || 'history_story',
@@ -3353,6 +3338,7 @@ export class ZTTeamFacebookService {
         needsCover,
         avatarPrompt: (pendingJob as any).branding_custom_avatar_prompt,
         coverPrompt: (pendingJob as any).branding_custom_cover_prompt,
+        autoApply: (pendingJob as any).branding_auto_apply ?? true,
         autoApplyFacebook: (pendingJob as any).branding_auto_apply ?? true,
       }
     };
@@ -3435,6 +3421,10 @@ export class ZTTeamFacebookService {
       } catch (applyErr: any) {
         applyMessage = `Lỗi áp dụng lên Facebook: ${applyErr.message}`;
         this.logger.warn(`[Branding Auto-Apply] ${applyMessage}`);
+        await this.prisma.ztteam_pages.update({
+          where: { id: page.id },
+          data: { branding_error: applyMessage } as any
+        });
       }
     }
 

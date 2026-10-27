@@ -254,16 +254,22 @@ async function ztteam_waitForAndExtractImage(page, label, timeoutSec = 240) {
  * Xử lý 1 Branding Job cho 1 Fanpage
  */
 async function ztteam_processBrandingJob(job) {
+  const pageId = job.pageId || job.id;
+  const pageName = job.pageName || job.name || 'Fanpage';
+  const fbPageId = job.fbPageId || job.fb_page_id || job.pageFbId || 'N/A';
+  const autoApply = (job.autoApply !== undefined) ? job.autoApply : ((job.autoApplyFacebook !== undefined) ? job.autoApplyFacebook : true);
+
   console.log(`\n========================================================`);
   console.log(`🎨 [${WORKER_NAME}] BẮT ĐẦU JOB TẠO BRANDING FANPAGE`);
-  console.log(`📄 Page ID  : ${job.pageId}`);
-  console.log(`📛 Tên Page : ${job.pageName}`);
-  console.log(`🎯 Loại     : ${job.type} (${job.theme || 'Mặc định'})`);
-  console.log(`⚡ Tự Áp Dụng: ${job.autoApply ? 'BẬT (Meta Graph API)' : 'TẮT (Chỉ lưu vào hệ thống)'}`);
+  console.log(`📛 Tên Fanpage : ${pageName}`);
+  console.log(`🆔 ID Facebook : ${fbPageId}`);
+  console.log(`🔑 Job UUID    : ${pageId}`);
+  console.log(`🎯 Loại Cần Tạo: ${job.type} (${job.theme || 'Mặc định'})`);
+  console.log(`⚡ Tự Áp Dụng  : ${autoApply ? 'BẬT (Meta Graph API)' : 'TẮT (Chỉ lưu vào hệ thống)'}`);
   console.log(`========================================================`);
 
-  const localAvatarPath = path.join(TEMP_DIR, `avatar_${job.pageId}.png`);
-  const localCoverPath = path.join(TEMP_DIR, `cover_${job.pageId}.png`);
+  const localAvatarPath = path.join(TEMP_DIR, `avatar_${pageId}.png`);
+  const localCoverPath = path.join(TEMP_DIR, `cover_${pageId}.png`);
 
   let browser = null;
   let page = null;
@@ -289,13 +295,13 @@ async function ztteam_processBrandingJob(job) {
 
     /** 2. Tạo Avatar nếu yêu cầu */
     if (job.type === 'avatar' || job.type === 'both') {
-      console.log(`\n🖼️ [${WORKER_NAME}] [1/2] Tiến hành tạo Ảnh Đại Diện (Avatar)...`);
+      console.log(`\n🖼️ [${WORKER_NAME}] [1/2] Tiến hành tạo Ảnh Đại Diện (Avatar) cho "${pageName}"...`);
       /** Reset tab Muse để giải phóng RAM & sạch dữ liệu cũ */
       await page.goto('https://muse.ai/', { waitUntil: 'domcontentloaded', timeout: 45000 });
       await page.waitForSelector('textarea', { timeout: 25000 });
       await new Promise(r => setTimeout(r, 2000));
 
-      const avatarPrompt = (job.avatarPrompt || `Thiết kế ảnh đại diện (avatar icon) hình vuông tỉ lệ 1:1 cho fanpage "${job.pageName}", phong cách chuyên nghiệp, hiện đại, sắc nét 4K 1024x1024`).replace(/\{PAGE_NAME\}/g, job.pageName);
+      const avatarPrompt = (job.avatarPrompt || `Thiết kế ảnh đại diện (avatar icon) hình vuông tỉ lệ 1:1 cho fanpage "${pageName}", phong cách chuyên nghiệp, hiện đại, sắc nét 4K 1024x1024`).replace(/\{PAGE_NAME\}/g, pageName);
       
       await ztteam_sendPromptToMuse(page, avatarPrompt);
       const avatarBuffer = await ztteam_waitForAndExtractImage(page, 'Avatar', 180);
@@ -308,13 +314,13 @@ async function ztteam_processBrandingJob(job) {
 
     /** 3. Tạo Cover nếu yêu cầu */
     if (job.type === 'cover' || job.type === 'both') {
-      console.log(`\n🖼️ [${WORKER_NAME}] [2/2] Tiến hành tạo Ảnh Bìa (Cover Banner)...`);
+      console.log(`\n🖼️ [${WORKER_NAME}] [2/2] Tiến hành tạo Ảnh Bìa (Cover Banner) cho "${pageName}"...`);
       /** Reset tab Muse cho Cover */
       await page.goto('https://muse.ai/', { waitUntil: 'domcontentloaded', timeout: 45000 });
       await page.waitForSelector('textarea', { timeout: 25000 });
       await new Promise(r => setTimeout(r, 2000));
 
-      const coverPrompt = (job.coverPrompt || `Thiết kế ảnh bìa (cover banner) Facebook ngang tỉ lệ 16:9 (1920x1080) cho fanpage "${job.pageName}", chủ đề hấp dẫn, bố cục cân đối chừa khoảng trống cho avatar`).replace(/\{PAGE_NAME\}/g, job.pageName);
+      const coverPrompt = (job.coverPrompt || `Thiết kế ảnh bìa (cover banner) Facebook ngang tỉ lệ 16:9 (1920x1080) cho fanpage "${pageName}", chủ đề hấp dẫn, bố cục cân đối chừa khoảng trống cho avatar`).replace(/\{PAGE_NAME\}/g, pageName);
       
       await ztteam_sendPromptToMuse(page, coverPrompt);
       const coverBuffer = await ztteam_waitForAndExtractImage(page, 'Cover', 180);
@@ -326,7 +332,7 @@ async function ztteam_processBrandingJob(job) {
     /** 4. Upload kết quả lên VPS qua /attach-result */
     console.log(`\n📤 [${WORKER_NAME}] Đang tải ảnh thành phẩm lên máy chủ VPS (${TARGET_URL})...`);
     const formData = new FormData();
-    formData.append('autoApply', job.autoApply ? 'true' : 'false');
+    formData.append('autoApply', autoApply ? 'true' : 'false');
 
     if (avatarGenerated && fs.existsSync(localAvatarPath)) {
       formData.append('avatar', fs.createReadStream(localAvatarPath));
@@ -336,7 +342,7 @@ async function ztteam_processBrandingJob(job) {
     }
 
     const uploadRes = await axios.post(
-      `${TARGET_URL}/api/facebook/pages/branding/${job.pageId}/attach-result`,
+      `${TARGET_URL}/api/facebook/pages/branding/${pageId}/attach-result`,
       formData,
       {
         headers: {
@@ -347,20 +353,20 @@ async function ztteam_processBrandingJob(job) {
     );
 
     console.log(`========================================================`);
-    console.log(`🎉 HOÀN TẤT THÀNH CÔNG JOB CHO PAGE: [${job.pageName}]!`);
+    console.log(`🎉 HOÀN TẤT THÀNH CÔNG JOB CHO PAGE: [${pageName}]!`);
     const resData = uploadRes.data?.data || uploadRes.data || {};
     console.log(`🖼️ Avatar URL : ${resData.avatarUrl || 'N/A'}`);
     console.log(`🖼️ Cover URL  : ${resData.coverUrl || 'N/A'}`);
     console.log(`⚡ Meta Apply : ${resData.appliedFacebook ? 'THÀNH CÔNG' : (resData.applyMessage || 'Chưa áp dụng')}`);
     console.log(`========================================================\n`);
 
-    await ztteam_cooldown(SUCCESS_COOLDOWN_SEC, 'Hoàn tất branding 1 Page. Tạm nghỉ');
+    await ztteam_cooldown(SUCCESS_COOLDOWN_SEC, `Hoàn tất branding Fanpage "${pageName}". Tạm nghỉ`);
   } catch (err) {
-    console.error(`\n❌ [${WORKER_NAME}] LỖI XỬ LÝ JOB CHO PAGE #${job.pageId}:`, err.message);
+    console.error(`\n❌ [${WORKER_NAME}] LỖI XỬ LÝ JOB CHO PAGE "${pageName}" (#${pageId}):`, err.message);
 
     /** Báo lỗi về server để giải phóng hàng đợi */
     try {
-      await axios.post(`${TARGET_URL}/api/facebook/pages/branding/${job.pageId}/reset`, {
+      await axios.post(`${TARGET_URL}/api/facebook/pages/branding/${pageId}/reset`, {
         error: err.message
       });
       console.log(`⚠️ [${WORKER_NAME}] Đã chuyển trạng thái FAILED trên máy chủ.`);

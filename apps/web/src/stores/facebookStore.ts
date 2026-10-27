@@ -44,6 +44,17 @@ export interface ZTTeamFanpage {
   appId?: string | null;
   appName?: string | null;
   tokenExpiry?: string | null;
+  coverUrl?: string | null;
+  brandingAvatarUrl?: string | null;
+  brandingCoverUrl?: string | null;
+  brandingStatus?: string | null;
+  brandingType?: string | null;
+  brandingTheme?: string | null;
+  brandingAvatarPrompt?: string | null;
+  brandingCoverPrompt?: string | null;
+  brandingError?: string | null;
+  hasCustomAvatar?: boolean;
+  hasCustomCover?: boolean;
 }
 
 interface ZTTeamFacebookState {

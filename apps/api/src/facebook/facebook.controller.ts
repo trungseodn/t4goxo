@@ -1,9 +1,12 @@
-import { Body, Controller, Post, Get, Param, UseGuards, Request, Put, Delete, UseInterceptors, UploadedFile } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { Body, Controller, Post, Get, Param, UseGuards, Request, Put, Delete, UseInterceptors, UploadedFile, UploadedFiles } from '@nestjs/common';
+import { FileInterceptor, FileFieldsInterceptor } from '@nestjs/platform-express';
 import * as os from 'os';
+import * as path from 'path';
+import * as fs from 'fs';
 const { diskStorage } = require('multer');
 import { ZTTeamFacebookService } from './facebook.service';
 import { ZTTeamAuthGuard } from '../auth/auth.guard';
+import { ztteam_getStorageRoot } from '../common/ztteam_storage.util';
 
 @Controller('facebook')
 @UseGuards(ZTTeamAuthGuard)
@@ -133,6 +136,60 @@ export class ZTTeamFacebookController {
     @Body('manualLink') manualLink?: string
   ) {
     return this.facebookService.ztteam_autoCommentLink(pageId, postId, manualLink);
+  }
+
+  @Post('pages/branding/bulk-queue')
+  ztteam_queueBrandingJobs(@Request() req: any, @Body() body: any) {
+    return this.facebookService.ztteam_queueBrandingJobs(req.user.sub, body);
+  }
+
+  @Get('pages/branding/pending-job')
+  ztteam_getPendingBrandingJob() {
+    return this.facebookService.ztteam_getPendingBrandingJob();
+  }
+
+  @Get('pages/branding/queue-status')
+  ztteam_getBrandingQueueStatus() {
+    return this.facebookService.ztteam_getBrandingQueueStatus();
+  }
+
+  @Post('pages/branding/:pageId/reset')
+  ztteam_resetBrandingJob(@Param('pageId') pageId: string) {
+    return this.facebookService.ztteam_resetBrandingJob(pageId);
+  }
+
+  @Post('pages/branding/:pageId/attach-result')
+  @UseInterceptors(FileFieldsInterceptor([
+    { name: 'avatar', maxCount: 1 },
+    { name: 'cover', maxCount: 1 },
+  ], {
+    storage: diskStorage({
+      destination: (req: any, file: any, cb: any) => {
+        const brandingPath = path.join(ztteam_getStorageRoot(), 'branding');
+        if (!fs.existsSync(brandingPath)) {
+          fs.mkdirSync(brandingPath, { recursive: true });
+        }
+        cb(null, brandingPath);
+      },
+      filename: (req: any, file: any, cb: any) => {
+        const safeId = (req.params.pageId || 'brand').replace(/[^a-zA-Z0-9_-]/g, '');
+        const ext = path.extname(file.originalname) || '.png';
+        cb(null, `muse_${file.fieldname}_${safeId}_${Date.now()}${ext}`);
+      }
+    })
+  }))
+  async ztteam_attachBrandingResult(
+    @Param('pageId') pageId: string,
+    @UploadedFiles() files: { avatar?: any[]; cover?: any[] },
+    @Body() body: any
+  ) {
+    return this.facebookService.ztteam_attachBrandingResult(pageId, {
+      avatarFile: files?.avatar?.[0],
+      coverFile: files?.cover?.[0],
+      avatarUrl: body?.avatarUrl,
+      coverUrl: body?.coverUrl,
+      error: body?.error,
+    });
   }
 
   @Post('pages/branding/batch-generate')

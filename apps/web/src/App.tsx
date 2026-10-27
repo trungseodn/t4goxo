@@ -16,6 +16,7 @@ import FanpageReport from './pages/FanpageReport'
 import UserManagement from './pages/UserManagement'
 import StoryTestStudio from './pages/StoryTestStudio'
 import MetaBMGuidePage from './pages/MetaBMGuidePage'
+import PageBrandingMuse from './pages/PageBrandingMuse'
 
 import { useZTTeamAuthStore } from './stores/authStore'
 import './index.css'
@@ -45,6 +46,7 @@ function App() {
         >
           <Route index element={<Overview />} />
           <Route path="facebook" element={<FacebookPages />} />
+          <Route path="facebook/branding-muse" element={<PageBrandingMuse />} />
           <Route path="facebook/business-hub" element={<MetaBusinessHub />} />
           <Route path="meta-bm-guide" element={<MetaBMGuidePage />} />
           <Route path="facebook/pages/:id/settings" element={<FacebookPageSettings />} />

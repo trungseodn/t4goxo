@@ -726,6 +726,17 @@ export class ZTTeamFacebookService {
         pendingReelsCount,
         totalPendingCount: pendingImagesCount + pendingReelsCount,
         isCheckpointBlocked: checkpointPageIds.has(p.id),
+        coverUrl: (p as any).branding_cover_url || p.cover_url || null,
+        brandingAvatarUrl: (p as any).branding_avatar_url || null,
+        brandingCoverUrl: (p as any).branding_cover_url || null,
+        brandingStatus: (p as any).branding_status || 'NONE',
+        brandingType: (p as any).branding_type || 'both',
+        brandingTheme: (p as any).branding_theme || 'history_story',
+        brandingAvatarPrompt: (p as any).branding_custom_avatar_prompt || (p as any).branding_avatar_prompt || null,
+        brandingCoverPrompt: (p as any).branding_custom_cover_prompt || (p as any).branding_cover_prompt || null,
+        brandingError: (p as any).branding_error || null,
+        hasCustomAvatar: !!(p as any).branding_avatar_url,
+        hasCustomCover: !!(p as any).branding_cover_url,
         /** We do not send accessToken back to frontend for security */
       };
     }));
@@ -3167,6 +3178,348 @@ export class ZTTeamFacebookService {
       captionSuccess,
       placement,
     };
+  }
+
+  /**
+   * ZTTeam: Đưa hàng loạt Fanpage vào hàng đợi tạo Ảnh bìa & Avatar bằng Muse.ai
+   */
+  async ztteam_queueBrandingJobs(userId: string, body: {
+    scope?: 'bm' | 'selected' | 'all';
+    bmName?: string;
+    pageIds?: string[];
+    filterMode?: 'missing_only' | 'missing_cover' | 'missing_avatar' | 'all';
+    customAvatarPrompt?: string;
+    customCoverPrompt?: string;
+    theme?: string;
+    autoApplyFacebook?: boolean;
+    brandingType?: 'both' | 'avatar' | 'cover';
+  }) {
+    const {
+      scope = 'bm',
+      bmName,
+      pageIds = [],
+      filterMode = 'missing_only',
+      customAvatarPrompt,
+      customCoverPrompt,
+      theme = 'history_story',
+      autoApplyFacebook = true,
+      brandingType = 'both',
+    } = body;
+
+    const user = await this.prisma.ztteam_users.findUnique({ where: { id: userId } });
+    const isAdmin = !user || user.role === 'ADMIN';
+
+    let whereClause: any = { is_active: true };
+    if (!isAdmin) {
+      whereClause.fb_account = { owner_user_id: userId };
+    }
+
+    if (scope === 'bm' && bmName) {
+      whereClause.fb_account = { ...(whereClause.fb_account || {}), business_name: bmName };
+    } else if (scope === 'selected' && pageIds.length > 0) {
+      whereClause.OR = [
+        { id: { in: pageIds } },
+        { fb_page_id: { in: pageIds } }
+      ];
+    }
+
+    const candidatePages = await this.prisma.ztteam_pages.findMany({
+      where: whereClause,
+      include: { fb_account: true, sources: true },
+      orderBy: { name: 'asc' }
+    });
+
+    const filteredPages = candidatePages.filter(p => {
+      const hasAvatar = !!(p as any).branding_avatar_url;
+      const hasCover = !!(p as any).branding_cover_url;
+      if (filterMode === 'missing_only') return !hasAvatar || !hasCover;
+      if (filterMode === 'missing_cover') return !hasCover;
+      if (filterMode === 'missing_avatar') return !hasAvatar;
+      return true;
+    });
+
+    if (filteredPages.length === 0) {
+      return {
+        success: false,
+        totalQueued: 0,
+        message: 'Không tìm thấy Fanpage nào thỏa mãn điều kiện lọc để đưa vào hàng đợi.'
+      };
+    }
+
+    const defaultAvatarPrompt = customAvatarPrompt?.trim() ||
+      `Create a 1:1 square iconic profile picture avatar for a storytelling page named "{PAGE_NAME}". Theme: historical mysteries and forgotten stories. Cinematic atmospheric lighting, dramatic depth, 8k resolution, minimalist emblem style, photorealistic.`;
+    
+    const defaultCoverPrompt = customCoverPrompt?.trim() ||
+      `Create a breathtaking cinematic 16:9 widescreen Facebook cover banner for "{PAGE_NAME}". Theme: atmospheric historical archive, ancient secrets, dramatic storytelling mood, rich textures, volumetric lighting, photorealistic masterpiece, 8k.`;
+
+    let queuedCount = 0;
+    for (const page of filteredPages) {
+      const pageAvatarPrompt = defaultAvatarPrompt
+        .replace(/\{PAGE_NAME\}/g, page.name)
+        .replace(/\{CATEGORY\}/g, page.category || 'Story & History')
+        .replace(/\{THEME\}/g, theme);
+
+      const pageCoverPrompt = defaultCoverPrompt
+        .replace(/\{PAGE_NAME\}/g, page.name)
+        .replace(/\{CATEGORY\}/g, page.category || 'Story & History')
+        .replace(/\{THEME\}/g, theme);
+
+      await this.prisma.ztteam_pages.update({
+        where: { id: page.id },
+        data: {
+          branding_status: 'PENDING',
+          branding_type: brandingType,
+          branding_theme: theme,
+          branding_custom_avatar_prompt: pageAvatarPrompt,
+          branding_custom_cover_prompt: pageCoverPrompt,
+          branding_auto_apply: autoApplyFacebook,
+          branding_error: null,
+          branding_updated_at: new Date(),
+        } as any
+      });
+      queuedCount++;
+    }
+
+    return {
+      success: true,
+      totalQueued: queuedCount,
+      message: `Đã đưa ${queuedCount} Fanpage vào hàng đợi tạo nhận diện Muse thành công!`,
+    };
+  }
+
+  /**
+   * ZTTeam: Muse Worker lấy job tạo Avatar & Ảnh bìa tiếp theo
+   * Tự động giải phóng job kẹt > 15 phút
+   */
+  async ztteam_getPendingBrandingJob() {
+    const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000);
+    await this.prisma.ztteam_pages.updateMany({
+      where: {
+        branding_status: 'PROCESSING',
+        branding_updated_at: { lt: fifteenMinutesAgo }
+      } as any,
+      data: {
+        branding_status: 'PENDING',
+      } as any
+    });
+
+    const pendingJob = await this.prisma.$transaction(async (tx) => {
+      const rows = await tx.$queryRawUnsafe<Array<{ id: string }>>(`
+        SELECT zp.id
+        FROM ztteam_pages zp
+        WHERE zp.is_active = true
+          AND zp.branding_status = 'PENDING'
+        ORDER BY zp.branding_updated_at ASC NULLS FIRST
+        FOR UPDATE SKIP LOCKED
+        LIMIT 1
+      `);
+
+      if (!rows || rows.length === 0) return null;
+      const chosenId = rows[0].id;
+
+      await tx.ztteam_pages.update({
+        where: { id: chosenId },
+        data: {
+          branding_status: 'PROCESSING',
+          branding_updated_at: new Date(),
+        } as any
+      });
+
+      return await tx.ztteam_pages.findUnique({
+        where: { id: chosenId },
+        include: { fb_account: true, sources: true }
+      });
+    });
+
+    if (!pendingJob) {
+      return { success: false, message: 'Không có job nhận diện nào đang chờ' };
+    }
+
+    const type = (pendingJob as any).branding_type || 'both';
+    const needsAvatar = type === 'both' || type === 'avatar';
+    const needsCover = type === 'both' || type === 'cover';
+
+    return {
+      success: true,
+      job: {
+        id: pendingJob.id,
+        fbPageId: pendingJob.fb_page_id,
+        name: pendingJob.name,
+        category: pendingJob.category,
+        businessName: pendingJob.fb_account?.business_name,
+        theme: (pendingJob as any).branding_theme || 'history_story',
+        type,
+        needsAvatar,
+        needsCover,
+        avatarPrompt: (pendingJob as any).branding_custom_avatar_prompt,
+        coverPrompt: (pendingJob as any).branding_custom_cover_prompt,
+        autoApplyFacebook: (pendingJob as any).branding_auto_apply ?? true,
+      }
+    };
+  }
+
+  /**
+   * ZTTeam: Muse Worker upload file Avatar / Cover kết quả lên hệ thống
+   */
+  async ztteam_attachBrandingResult(pageId: string, data: {
+    avatarFile?: any;
+    coverFile?: any;
+    avatarUrl?: string;
+    coverUrl?: string;
+    error?: string;
+  }) {
+    const page = await this.prisma.ztteam_pages.findFirst({
+      where: {
+        OR: [{ id: pageId }, { fb_page_id: pageId }]
+      }
+    });
+
+    if (!page) {
+      throw new BadRequestException('Fanpage không tồn tại');
+    }
+
+    if (data.error) {
+      await this.prisma.ztteam_pages.update({
+        where: { id: page.id },
+        data: {
+          branding_status: 'FAILED',
+          branding_error: data.error,
+          branding_updated_at: new Date(),
+        } as any
+      });
+      return { success: false, message: `Ghi nhận lỗi từ Muse Worker: ${data.error}` };
+    }
+
+    const updateData: any = {
+      branding_status: 'COMPLETED',
+      branding_error: null,
+      branding_updated_at: new Date(),
+    };
+
+    let avatarLocalPath: string | undefined;
+    let coverLocalPath: string | undefined;
+
+    if (data.avatarFile) {
+      updateData.branding_avatar_url = `/storage/branding/${data.avatarFile.filename}`;
+      avatarLocalPath = data.avatarFile.path;
+    } else if (data.avatarUrl) {
+      updateData.branding_avatar_url = data.avatarUrl;
+    }
+
+    if (data.coverFile) {
+      updateData.branding_cover_url = `/storage/branding/${data.coverFile.filename}`;
+      coverLocalPath = data.coverFile.path;
+    } else if (data.coverUrl) {
+      updateData.branding_cover_url = data.coverUrl;
+    }
+
+    await this.prisma.ztteam_pages.update({
+      where: { id: page.id },
+      data: updateData
+    });
+
+    let appliedFacebook = false;
+    let applyMessage = '';
+    const shouldAutoApply = (page as any).branding_auto_apply ?? true;
+
+    if (shouldAutoApply) {
+      try {
+        const applyRes = await this.ztteam_applyPageBranding(page.id, {
+          avatarUrl: updateData.branding_avatar_url,
+          avatarLocalPath,
+          coverUrl: updateData.branding_cover_url,
+          coverLocalPath,
+        });
+        appliedFacebook = true;
+        applyMessage = applyRes?.message || 'Đã áp dụng thành công lên Facebook!';
+      } catch (applyErr: any) {
+        applyMessage = `Lỗi áp dụng lên Facebook: ${applyErr.message}`;
+        this.logger.warn(`[Branding Auto-Apply] ${applyMessage}`);
+      }
+    }
+
+    return {
+      success: true,
+      pageId: page.id,
+      name: page.name,
+      avatarUrl: updateData.branding_avatar_url,
+      coverUrl: updateData.branding_cover_url,
+      appliedFacebook,
+      applyMessage,
+    };
+  }
+
+  /**
+   * ZTTeam: Thống kê trạng thái hàng đợi Branding
+   */
+  async ztteam_getBrandingQueueStatus() {
+    const counts = await this.prisma.ztteam_pages.groupBy({
+      by: ['branding_status'],
+      where: { is_active: true },
+      _count: true,
+    });
+
+    let pending = 0;
+    let processing = 0;
+    let completed = 0;
+    let failed = 0;
+
+    for (const c of counts) {
+      const status = (c as any).branding_status || 'NONE';
+      if (status === 'PENDING') pending = c._count;
+      else if (status === 'PROCESSING') processing = c._count;
+      else if (status === 'COMPLETED') completed = c._count;
+      else if (status === 'FAILED') failed = c._count;
+    }
+
+    const totalPages = await this.prisma.ztteam_pages.count({ where: { is_active: true } });
+    const hasAvatarCount = await this.prisma.ztteam_pages.count({
+      where: { is_active: true, branding_avatar_url: { not: null } }
+    });
+    const hasCoverCount = await this.prisma.ztteam_pages.count({
+      where: { is_active: true, branding_cover_url: { not: null } }
+    });
+    const missingBothCount = await this.prisma.ztteam_pages.count({
+      where: {
+        is_active: true,
+        branding_avatar_url: null,
+        branding_cover_url: null,
+      }
+    });
+
+    return {
+      success: true,
+      queue: {
+        pending,
+        processing,
+        completed,
+        failed,
+        totalActiveJobs: pending + processing,
+      },
+      stats: {
+        totalPages,
+        hasAvatarCount,
+        hasCoverCount,
+        missingBothCount,
+      }
+    };
+  }
+
+  /**
+   * ZTTeam: Hủy bỏ hoặc Reset trạng thái hàng đợi Branding cho Page
+   */
+  async ztteam_resetBrandingJob(pageId: string) {
+    await this.prisma.ztteam_pages.updateMany({
+      where: {
+        OR: [{ id: pageId }, { fb_page_id: pageId }]
+      },
+      data: {
+        branding_status: 'NONE',
+        branding_error: null,
+        branding_updated_at: new Date(),
+      } as any
+    });
+    return { success: true, message: 'Đã hủy/reset trạng thái job nhận diện cho Fanpage' };
   }
 }
 

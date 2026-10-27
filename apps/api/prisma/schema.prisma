@@ -76,6 +76,14 @@ model ztteam_pages {
   branding_cover_url        String?
   branding_avatar_prompt    String?  @db.Text
   branding_cover_prompt     String?  @db.Text
+  branding_status           String?  @default("NONE") /** NONE | PENDING | PROCESSING | COMPLETED | FAILED */
+  branding_type             String?  @default("both") /** both | avatar | cover */
+  branding_theme            String?  @default("history_story")
+  branding_custom_avatar_prompt String? @db.Text
+  branding_custom_cover_prompt  String? @db.Text
+  branding_auto_apply       Boolean  @default(true)
+  branding_error            String?  @db.Text
+  branding_updated_at       DateTime?
   
   /** Tab 1 & 2 */
   tags                           String[] @default([])

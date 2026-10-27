@@ -348,11 +348,10 @@ async function ztteam_processBrandingJob(job) {
 
     console.log(`========================================================`);
     console.log(`🎉 HOÀN TẤT THÀNH CÔNG JOB CHO PAGE: [${job.pageName}]!`);
-    if (uploadRes.data?.data) {
-      console.log(`🖼️ Avatar URL : ${uploadRes.data.data.avatarUrl || 'N/A'}`);
-      console.log(`🖼️ Cover URL  : ${uploadRes.data.data.coverUrl || 'N/A'}`);
-      console.log(`⚡ Meta Apply : ${uploadRes.data.data.appliedToFacebook ? 'THÀNH CÔNG' : 'Chưa áp dụng'}`);
-    }
+    const resData = uploadRes.data?.data || uploadRes.data || {};
+    console.log(`🖼️ Avatar URL : ${resData.avatarUrl || 'N/A'}`);
+    console.log(`🖼️ Cover URL  : ${resData.coverUrl || 'N/A'}`);
+    console.log(`⚡ Meta Apply : ${resData.appliedFacebook ? 'THÀNH CÔNG' : (resData.applyMessage || 'Chưa áp dụng')}`);
     console.log(`========================================================\n`);
 
     await ztteam_cooldown(SUCCESS_COOLDOWN_SEC, 'Hoàn tất branding 1 Page. Tạm nghỉ');

@@ -8,6 +8,7 @@ import { ZTTeamStoryTestService } from '../story-test/story-test.service';
 import { ZTTeamHookVideoService } from '../media/hook-video.service';
 import { ztteam_getImagesPath, ztteam_getStorageRoot } from '../common/ztteam_storage.util';
 import { ztteam_getNewsComment, ZTTEAM_NEWS_CAPTION_CTA } from '../common/ztteam_news_comment.util';
+import { ZTTeamAIService } from '../ai/ai.service';
 
 @Injectable()
 export class ZTTeamCrawlerService {
@@ -20,6 +21,7 @@ export class ZTTeamCrawlerService {
     private readonly hookVideoService: ZTTeamHookVideoService,
     @Inject(forwardRef(() => ZTTeamStoryTestService))
     private readonly storyTestService: ZTTeamStoryTestService,
+    private readonly aiService: ZTTeamAIService,
   ) {}
 
   /**
@@ -231,28 +233,78 @@ export class ZTTeamCrawlerService {
         }
       }
 
-      /** Check which pages have ALREADY posted or queued this WP post */
+      /** Check which pages have ALREADY posted or queued this WP post (by ID, Title, or URL across Images & Reels) */
+      const wpResultIdStr = wpResult.id.toString();
+      const storyTitleTrimmed = storyTitle.trim();
+
       const existingAssignments = await this.prisma.ztteam_images.findMany({
-        where: { wp_post_id: wpResult.id.toString() },
+        where: {
+          OR: [
+            { wp_post_id: wpResultIdStr },
+            ...(storyTitleTrimmed ? [{ wp_post_title: storyTitleTrimmed }] : []),
+            ...(wpResult.url ? [{ wp_post_url: wpResult.url }] : [])
+          ]
+        },
         select: { page_id: true }
       });
-      const usedPageIds = new Set(existingAssignments.map(a => a.page_id));
+      const usedPageIds = new Set(existingAssignments.map(a => a.page_id).filter(Boolean));
 
       const existingHistory = await this.prisma.ztteam_image_history.findMany({
-        where: { wp_post_id: wpResult.id.toString() },
+        where: { wp_post_id: wpResultIdStr },
         select: { page_id: true }
       });
-      existingHistory.forEach(h => usedPageIds.add(h.page_id));
+      existingHistory.forEach(h => {
+        if (h.page_id) usedPageIds.add(h.page_id);
+      });
 
-      /** Filter candidate pages that haven't received this post yet */
-      const eligiblePages = candidatePages.filter(p => !usedPageIds.has(p.id));
+      const existingReels = await this.prisma.ztteam_reels.findMany({
+        where: {
+          OR: [
+            { wp_post_id: wpResultIdStr },
+            ...(storyTitleTrimmed ? [{ wp_post_title: storyTitleTrimmed }] : []),
+            ...(wpResult.url ? [{ wp_post_url: wpResult.url }] : [])
+          ]
+        },
+        select: { page_id: true }
+      });
+      existingReels.forEach(r => {
+        if (r.page_id) usedPageIds.add(r.page_id);
+      });
 
-      if (eligiblePages.length > 0) {
-        /** Strict Round-Robin: Pick the page that received a post least recently (oldest or null created_at) */
-        let chosenPage = eligiblePages[0];
-        if (eligiblePages.length > 1) {
+      const existingReelHistory = await this.prisma.ztteam_reel_history.findMany({
+        where: { wp_post_id: wpResultIdStr },
+        select: { page_id: true }
+      });
+      existingReelHistory.forEach(rh => {
+        if (rh.page_id) usedPageIds.add(rh.page_id);
+      });
+
+      /** ZTTeam: ĐỘC QUYỀN TOÀN CỤC - Nếu bài viết đã tồn tại ở bất kỳ Fanpage nào hoặc trong hệ thống, DỪNG LẠI không gán trùng */
+      if (usedPageIds.size > 0 || existingAssignments.length > 0 || existingReels.length > 0) {
+        this.logger.log(`Story #${wpResult.id} đã tồn tại trong hệ thống (gán cho: ${Array.from(usedPageIds).join(', ') || 'Kho thủ công'}). Bỏ qua chống trùng bài giữa các Fanpage.`);
+        const existingImg = await this.prisma.ztteam_images.findFirst({
+          where: { wp_post_id: wpResult.id.toString() },
+        });
+        return {
+          success: true,
+          title: storyTitle,
+          wpPostId: wpResult.id,
+          wpPostUrl: wpResult.url,
+          image2kUrl,
+          fanpageCaption: existingImg?.ai_caption || '',
+          firstComment: existingImg?.ai_first_comment || undefined,
+          pageId: existingImg?.page_id || undefined,
+          imageId: existingImg?.id,
+        };
+      }
+
+      /** Bài viết hoàn toàn mới chưa từng xuất hiện trên bất kỳ Page nào */
+      if (candidatePages.length > 0) {
+        /** Strict Round-Robin: Chọn duy nhất 1 Page lâu nhất chưa nhận bài */
+        let chosenPage = candidatePages[0];
+        if (candidatePages.length > 1) {
           const pageLastAssigned = await Promise.all(
-            eligiblePages.map(async (p) => {
+            candidatePages.map(async (p) => {
               const lastImage = await this.prisma.ztteam_images.findFirst({
                 where: { page_id: p.id },
                 orderBy: { created_at: 'desc' },
@@ -264,35 +316,42 @@ export class ZTTeamCrawlerService {
               };
             })
           );
-          /** Sắp xếp tăng dần theo lastTime: Page nào có lastTime nhỏ nhất (lâu nhất chưa nhận bài) sẽ đứng đầu */
           pageLastAssigned.sort((a, b) => a.lastTime - b.lastTime);
           chosenPage = pageLastAssigned[0].page;
         }
         targetPages.push(chosenPage);
-        this.logger.log(`[Round-Robin] Assigned story #${wpResult.id} exclusively to Page: ${chosenPage.name} (${chosenPage.id})`);
-      } else if (candidatePages.length === 0) {
-        /**
-         * ZTTeam: Nguồn cào này không có Fanpage nào liên kết active.
-         * Tuyệt đối KHÔNG fallback tự ý gán vào Fanpage khác.
-         * Để targetPages rỗng ([]) để hệ thống chuyển sang lưu vào Kho Đăng Thủ Công độc lập (page_id: null).
-         */
-        this.logger.log(`Nguồn cào (Target site #${targetSiteId}) không có Fanpage nào liên kết active. Tự động chuyển bài viết sang Kho Đăng Thủ Công.`);
+        this.logger.log(`[Round-Robin Độc Quyền] Gán bài #${wpResult.id} duy nhất cho Page: ${chosenPage.name} (${chosenPage.id})`);
       } else {
-        this.logger.log(`Story #${wpResult.id} has already been assigned to all matching Fanpages. Skipping duplicate assignment.`);
+        this.logger.log(`Nguồn cào (Target site #${targetSiteId}) không có Fanpage nào liên kết active. Tự động chuyển bài viết sang Kho Đăng Thủ Công.`);
       }
     }
 
     let createdImageId: string | undefined = undefined;
 
     for (const targetPage of targetPages) {
-      /** Prepare Caption & First Comment based on News Publisher standard */
-      const captionCTA = ZTTEAM_NEWS_CAPTION_CTA;
-      let fanpageCaption = `${titleUppercase}\n\n${part1}\n\n${captionCTA}`;
-      if (targetPage.add_link_to_caption) {
-        fanpageCaption += `\n\nFull story: ${wpResult.url}`;
+      /** Prepare Caption & First Comment based on True-Crime Cold Case standard */
+      let fanpageCaption = '';
+      let firstCommentText = '';
+
+      try {
+        const coldCase = await this.aiService.ztteam_generateColdCaseContent(
+          storyTitle,
+          cleanContent,
+          targetPage?.ai_custom_prompt,
+          wpResult.url
+        );
+        fanpageCaption = coldCase.fullCaption;
+        firstCommentText = coldCase.commentText;
+      } catch (aiErr: any) {
+        this.logger.warn(`AI Cold Case generation error, using fallback: ${aiErr.message}`);
+        const captionCTA = ZTTEAM_NEWS_CAPTION_CTA;
+        fanpageCaption = `${titleUppercase}\n\n${part1}\n\n${captionCTA}`;
+        firstCommentText = ztteam_getNewsComment(wpResult.url);
       }
 
-      const firstCommentText = ztteam_getNewsComment(wpResult.url);
+      if (targetPage.add_link_to_caption && !fanpageCaption.includes(wpResult.url)) {
+        fanpageCaption += `\n\nFull story: ${wpResult.url}`;
+      }
 
       let imgRecord = await this.prisma.ztteam_images.findFirst({
         where: {
@@ -362,6 +421,21 @@ export class ZTTeamCrawlerService {
         this.logger.warn(`Failed to copy image to standard folder: ${copyErr.message}`);
       }
 
+      /** Lưu vào lịch sử để vĩnh viễn không bao giờ có Fanpage nào khác lấy lại bài này */
+      await this.prisma.ztteam_image_history.upsert({
+        where: {
+          page_id_wp_post_id: {
+            page_id: targetPage.id,
+            wp_post_id: wpResult.id.toString(),
+          }
+        },
+        create: {
+          page_id: targetPage.id,
+          wp_post_id: wpResult.id.toString(),
+        },
+        update: {},
+      });
+
       this.logger.log(`Created Fanpage ready-to-post image item: ${imgRecord.id} for Page ${targetPage.id} (${targetPage.name})`);
 
       /** ZTTeam: Nếu Fanpage cấu hình đăng Reel hoặc Mixed và chọn engine hook_image (mặc định), tự động render Video Hook sắc nét */
@@ -378,9 +452,24 @@ export class ZTTeamCrawlerService {
 
     /** ZTTeam: Trường hợp KHÔNG CÓ Fanpage nào hoạt động -> Lưu bài viết vào Kho Đăng Thủ Công độc lập (page_id = null) */
     if (targetPages.length === 0) {
-      const captionCTA = ZTTEAM_NEWS_CAPTION_CTA;
-      const fanpageCaption = `${titleUppercase}\n\n${part1}\n\n${captionCTA}`;
-      const firstCommentText = ztteam_getNewsComment(wpResult.url);
+      let fanpageCaption = '';
+      let firstCommentText = '';
+
+      try {
+        const coldCase = await this.aiService.ztteam_generateColdCaseContent(
+          storyTitle,
+          cleanContent,
+          null,
+          wpResult.url
+        );
+        fanpageCaption = coldCase.fullCaption;
+        firstCommentText = coldCase.commentText;
+      } catch (aiErr: any) {
+        this.logger.warn(`AI Cold Case generation error for manual queue, using fallback: ${aiErr.message}`);
+        const captionCTA = ZTTEAM_NEWS_CAPTION_CTA;
+        fanpageCaption = `${titleUppercase}\n\n${part1}\n\n${captionCTA}`;
+        firstCommentText = ztteam_getNewsComment(wpResult.url);
+      }
 
       let imgRecord = await this.prisma.ztteam_images.findFirst({
         where: {

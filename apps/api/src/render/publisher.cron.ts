@@ -335,6 +335,37 @@ export class ZTTeamPublisherCron {
     this.logger.log(`Auto-publishing reel ${reel.id} to page ${page.name}...`);
 
     try {
+      /** ZTTeam: Kiểm tra an toàn trước khi gọi Facebook API - Không bao giờ đăng nếu bài này đã được xuất bản ở Page khác */
+      const reelTitleTrimmed = (reel.wp_post_title || '').trim();
+      const alreadyPostedReel = await this.prisma.ztteam_reels.findFirst({
+        where: {
+          id: { not: reel.id },
+          is_posted: true,
+          OR: [
+            { wp_post_id: reel.wp_post_id },
+            ...(reelTitleTrimmed ? [{ wp_post_title: reelTitleTrimmed }] : [])
+          ]
+        },
+        include: { page: true }
+      });
+
+      const alreadyPostedImage = await this.prisma.ztteam_images.findFirst({
+        where: {
+          is_posted: true,
+          OR: [
+            { wp_post_id: reel.wp_post_id },
+            ...(reelTitleTrimmed ? [{ wp_post_title: reelTitleTrimmed }] : [])
+          ]
+        },
+        include: { page: true }
+      });
+
+      if (alreadyPostedReel || alreadyPostedImage) {
+        const otherPageName = alreadyPostedReel?.page?.name || alreadyPostedImage?.page?.name || 'trang khác';
+        this.logger.warn(`[CHỐNG TRÙNG TOÀN CỤC] Reel "${reel.wp_post_title}" (ID #${reel.wp_post_id}) ĐÃ ĐƯỢC XUẤT BẢN trên Fanpage "${otherPageName}". Tự động HỦY bản sao trên Page "${page.name}" để không trùng.`);
+        await this.prisma.ztteam_reels.delete({ where: { id: reel.id } }).catch(() => {});
+        return;
+      }
       const videoPath = ztteam_getReelsPath(reel.id, 'output.mp4');
 
       if (!fs.existsSync(videoPath)) {
@@ -416,6 +447,21 @@ export class ZTTeamPublisherCron {
         }
       });
 
+      await this.prisma.ztteam_reel_history.upsert({
+        where: {
+          page_id_wp_post_id: {
+            page_id: page.id,
+            wp_post_id: reel.wp_post_id,
+          }
+        },
+        create: {
+          page_id: page.id,
+          wp_post_id: reel.wp_post_id,
+          title: reel.wp_post_title,
+        },
+        update: {},
+      }).catch(() => {});
+
       this.eventEmitter.emit('reel.updated', { id: reel.id, status: 'POSTED', fb_post_id: response.id });
       this.logger.log(`Reel ${reel.id} successfully auto-published to page ${page.name}`);
     } catch (error: any) {
@@ -495,6 +541,37 @@ export class ZTTeamPublisherCron {
     this.logger.log(`Auto-publishing image ${image.id} to page ${page.name} (forceImageOnly: ${forceImageOnly})...`);
 
     try {
+      /** ZTTeam: Kiểm tra an toàn trước khi gọi Facebook API - Không bao giờ đăng nếu bài này đã được xuất bản ở Page khác */
+      const imageTitleTrimmed = (image.wp_post_title || '').trim();
+      const alreadyPostedImage = await this.prisma.ztteam_images.findFirst({
+        where: {
+          id: { not: image.id },
+          is_posted: true,
+          OR: [
+            { wp_post_id: image.wp_post_id },
+            ...(imageTitleTrimmed ? [{ wp_post_title: imageTitleTrimmed }] : [])
+          ]
+        },
+        include: { page: true }
+      });
+
+      const alreadyPostedReel = await this.prisma.ztteam_reels.findFirst({
+        where: {
+          is_posted: true,
+          OR: [
+            { wp_post_id: image.wp_post_id },
+            ...(imageTitleTrimmed ? [{ wp_post_title: imageTitleTrimmed }] : [])
+          ]
+        },
+        include: { page: true }
+      });
+
+      if (alreadyPostedImage || alreadyPostedReel) {
+        const otherPageName = alreadyPostedImage?.page?.name || alreadyPostedReel?.page?.name || 'trang khác';
+        this.logger.warn(`[CHỐNG TRÙNG TOÀN CỤC] Bài viết "${image.wp_post_title}" (ID #${image.wp_post_id}) ĐÃ ĐƯỢC XUẤT BẢN trên Fanpage "${otherPageName}". Tự động HỦY bản sao trên Page "${page.name}" để không trùng.`);
+        await this.prisma.ztteam_images.delete({ where: { id: image.id } }).catch(() => {});
+        return;
+      }
       let absoluteImagePath = ztteam_getImagesPath(image.id, 'output.png');
 
       /** Fallback to image.image_url if output.png is not in standard dir */
@@ -622,6 +699,20 @@ export class ZTTeamPublisherCron {
           post_retry_count: 0,
         }
       });
+
+      await this.prisma.ztteam_image_history.upsert({
+        where: {
+          page_id_wp_post_id: {
+            page_id: page.id,
+            wp_post_id: image.wp_post_id,
+          }
+        },
+        create: {
+          page_id: page.id,
+          wp_post_id: image.wp_post_id,
+        },
+        update: {},
+      }).catch(() => {});
 
       this.logger.log(`Successfully published image ${image.id} to page ${page.name}, Post ID: ${fbPostId}${hookCommentId ? ' (Instant Comment posted)' : ''}`);
       this.eventEmitter.emit('image.posted', { imageId: image.id, pageId: page.id });

@@ -500,7 +500,77 @@ export class ZTTeamWordpressService {
     }
   }
 
-  async ztteam_getPosts(siteId: string, userId: string, categoryId?: string, targetTags?: string) {
+  /**
+   * ZTTeam: Chuẩn hóa tiêu đề bài viết để so khớp chống trùng lặp tuyệt đối
+   * Giải mã toàn bộ HTML entities (&rsquo;, &#8217;, &amp;...) và chuẩn hóa chữ thường
+   */
+  ztteam_normalizeTitle(title: string): string {
+    if (!title) return '';
+    return title
+      .toLowerCase()
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#039;/g, "'")
+      .replace(/&#8217;/g, "'")
+      .replace(/&#8216;/g, "'")
+      .replace(/&#8220;/g, '"')
+      .replace(/&#8221;/g, '"')
+      .replace(/&#8211;/g, '-')
+      .replace(/&#8212;/g, '--')
+      .replace(/&hellip;/g, '...')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/<[^>]*>?/gm, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  /**
+   * ZTTeam: Tự động dọn dẹp các bài trùng lặp chưa đăng trước khi đồng bộ mới
+   */
+  async ztteam_autoCleanupDuplicatesBeforeSync(): Promise<number> {
+    let removedCount = 0;
+    try {
+      const duplicatesById = await this.prisma.$queryRaw<Array<{ wp_post_id: string; cnt: number }>>`
+        SELECT wp_post_id, COUNT(*)::int as cnt
+        FROM ztteam_images
+        WHERE wp_post_id IS NOT NULL AND wp_post_id != ''
+        GROUP BY wp_post_id
+        HAVING COUNT(*) > 1
+      `;
+
+      for (const dup of duplicatesById) {
+        const allCopies = await this.prisma.ztteam_images.findMany({
+          where: { wp_post_id: dup.wp_post_id },
+          orderBy: [
+            { is_posted: 'desc' },
+            { created_at: 'asc' }
+          ]
+        });
+
+        const [primary, ...toRemove] = allCopies;
+        for (const item of toRemove) {
+          if (!item.is_posted) {
+            await this.prisma.ztteam_images.delete({ where: { id: item.id } });
+            removedCount++;
+          }
+        }
+      }
+    } catch (e: any) {
+      this.logger.warn(`Auto cleanup duplicates before sync: ${e.message}`);
+    }
+    return removedCount;
+  }
+
+  async ztteam_getPosts(
+    siteId: string,
+    userId: string,
+    categoryId?: string,
+    targetTags?: string,
+    page: number = 1,
+    perPage: number = 20
+  ) {
     let site = await this.prisma.ztteam_target_sites.findFirst({
       where: { id: siteId, owner_user_id: userId }
     });
@@ -515,7 +585,8 @@ export class ZTTeamWordpressService {
     let wpUrl = site.wp_url.replace(/\/$/, '');
 
     try {
-      const params: any = { per_page: 20, _embed: 1 };
+      const params: any = { per_page: perPage, _embed: 1 };
+      if (page > 1) params.page = page;
       if (categoryId) params.categories = categoryId;
       if (targetTags) params.tags = targetTags;
 
@@ -523,11 +594,31 @@ export class ZTTeamWordpressService {
         this.httpService.get(`${wpUrl}/wp-json/wp/v2/posts`, {
           headers: { Authorization: authHeader },
           params,
-          timeout: 12000,
+          timeout: 15000,
         })
       );
 
       return response.data.map((p: any) => {
+        const rawTitle = p.title?.rendered || 'No Title';
+        const cleanTitle = this.ztteam_normalizeTitle(rawTitle);
+        // Giữ title hiển thị đẹp nhưng đã decode HTML entities
+        const displayTitle = rawTitle
+          .replace(/&amp;/g, '&')
+          .replace(/&lt;/g, '<')
+          .replace(/&gt;/g, '>')
+          .replace(/&quot;/g, '"')
+          .replace(/&#039;/g, "'")
+          .replace(/&#8217;/g, "'")
+          .replace(/&#8216;/g, "'")
+          .replace(/&#8220;/g, '"')
+          .replace(/&#8221;/g, '"')
+          .replace(/&#8211;/g, '-')
+          .replace(/&#8212;/g, '--')
+          .replace(/&hellip;/g, '...')
+          .replace(/&nbsp;/g, ' ')
+          .replace(/<[^>]*>?/gm, '')
+          .trim();
+
         const rawContent = p.content?.rendered || p.title?.rendered || '';
         const cleanContent = rawContent.replace(/<[^>]*>?/gm, '').replace(/&nbsp;/g, ' ').trim();
         const rawExcerpt = p.excerpt?.rendered || cleanContent.substring(0, 180);
@@ -544,7 +635,8 @@ export class ZTTeamWordpressService {
 
         return {
           id: p.id,
-          title: (p.title?.rendered || 'No Title').replace(/<[^>]*>?/gm, ''),
+          title: displayTitle,
+          cleanTitle: cleanTitle,
           date: p.date,
           link: p.link,
           content: cleanContent,
@@ -604,6 +696,106 @@ export class ZTTeamWordpressService {
       this.logger.error('Failed to get sample post from WP', e.response?.data || e.message);
       return null;
     }
+  }
+
+  /**
+   * ZTTeam: Tải ảnh chuẩn, định dạng nội dung và nhập 1 bài viết độc quyền vào Fanpage
+   */
+  async ztteam_importPostToPage(page: any, site: any, post: any): Promise<boolean> {
+    const newImageId = crypto.randomUUID();
+    const targetDir = ztteam_getImagesPath(newImageId);
+    fs.mkdirSync(targetDir, { recursive: true });
+
+    let localImageUrl = '';
+    if (post.imageUrl) {
+      try {
+        let imgUrl = post.imageUrl;
+        if (imgUrl.startsWith('//')) imgUrl = 'https:' + imgUrl;
+        else if (imgUrl.startsWith('/')) imgUrl = site.wp_url.replace(/\/$/, '') + imgUrl;
+
+        const imgRes = await axios.get(imgUrl, {
+          responseType: 'arraybuffer',
+          timeout: 15000,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Referer': site.wp_url,
+          }
+        });
+
+        const buf = Buffer.from(imgRes.data);
+        const outPath = path.join(targetDir, 'output.png');
+        const origPath = path.join(targetDir, 'source_original.png');
+
+        try {
+          await sharp(buf).png().toFile(outPath);
+        } catch {
+          fs.writeFileSync(outPath, buf);
+        }
+        fs.writeFileSync(origPath, buf);
+
+        localImageUrl = `/storage/images/${newImageId}/output.png`;
+      } catch (dlErr: any) {
+        this.logger.warn(`Không thể tải ảnh chuẩn từ WP (${post.imageUrl}): ${dlErr.message}`);
+      }
+    }
+
+    if (!localImageUrl) {
+      this.logger.warn(`Bài viết #${post.id} ("${post.title}") không có ảnh đại diện khả dụng, bỏ qua để đảm bảo chất lượng video.`);
+      return false;
+    }
+
+    const titleUpper = (post.title || '').trim().toUpperCase();
+    const rawExcerpt = post.excerpt || post.content || '';
+    const cleanSnippet = rawExcerpt.substring(0, 500).trim();
+    let fanpageCaption = `${titleUpper}\n\n${cleanSnippet}\n\n${ZTTEAM_NEWS_CAPTION_CTA}`;
+    if (page.add_link_to_caption) {
+      fanpageCaption += `\n\nFull story: ${post.link}`;
+    }
+    const firstCommentText = ztteam_getNewsComment(post.link);
+    const shouldRenderVideo = page.post_format === 'reel' || page.post_format === 'mixed';
+
+    const imgRecord = await this.prisma.ztteam_images.create({
+      data: {
+        id: newImageId,
+        page_id: page.id,
+        wp_post_id: post.id.toString(),
+        wp_post_title: post.title || 'Bài viết',
+        wp_post_url: post.link,
+        template_id: 'wp_standard_image',
+        image_url: localImageUrl,
+        ai_caption: fanpageCaption,
+        ai_first_comment: firstCommentText,
+        comment_step: 0,
+        status: 'COMPLETED',
+        video_status: shouldRenderVideo ? 'PENDING' : 'NONE',
+        video_engine: page.video_engine || 'hook_image',
+      }
+    });
+
+    await this.prisma.ztteam_image_history.upsert({
+      where: {
+        page_id_wp_post_id: {
+          page_id: page.id,
+          wp_post_id: post.id.toString(),
+        }
+      },
+      create: {
+        page_id: page.id,
+        wp_post_id: post.id.toString(),
+      },
+      update: {},
+    });
+
+    this.eventEmitter.emit('image.updated', imgRecord);
+
+    if (shouldRenderVideo) {
+      this.hookVideoService.ztteam_renderHookVideo(newImageId).catch(err => {
+        this.logger.error(`Render video thất bại cho bài ${newImageId}: ${err.message}`);
+      });
+    }
+
+    this.logger.log(`[WP Auto-Sync] Đã đồng bộ thành công bài "${post.title}" (ID: ${post.id}) vào Fanpage "${page.name}"`);
+    return true;
   }
 
   /**
@@ -674,16 +866,53 @@ export class ZTTeamWordpressService {
           if (totalSynced >= batchSize) break;
           if (currentQueueCount + totalSynced >= queueLimit && !options?.forceSync) break;
 
-          /** 1. Kiểm tra xem bài viết đã từng đưa vào Fanpage này chưa */
-          const alreadyInHistory = await this.prisma.ztteam_image_history.findUnique({
+          /** 1. KIỂM TRA ĐỘC QUYỀN TOÀN CỤC: Tuyệt đối không cho phép 2 Fanpage lấy trùng cùng 1 bài viết */
+          const postWpIdStr = post.id.toString();
+          const postTitleTrimmed = (post.title || '').trim();
+
+          const alreadyInImagesGlobally = await this.prisma.ztteam_images.findFirst({
             where: {
-              page_id_wp_post_id: {
-                page_id: page.id,
-                wp_post_id: post.id.toString(),
-              }
-            }
+              OR: [
+                { wp_post_id: postWpIdStr },
+                ...(postTitleTrimmed ? [{ wp_post_title: postTitleTrimmed }] : []),
+                ...(post.link ? [{ wp_post_url: post.link }] : [])
+              ]
+            },
+            select: { id: true, page_id: true }
           });
-          if (alreadyInHistory) continue;
+          if (alreadyInImagesGlobally) {
+            continue;
+          }
+
+          const alreadyInHistoryGlobally = await this.prisma.ztteam_image_history.findFirst({
+            where: { wp_post_id: postWpIdStr },
+            select: { id: true, page_id: true }
+          });
+          if (alreadyInHistoryGlobally) {
+            continue;
+          }
+
+          const alreadyInReelsGlobally = await this.prisma.ztteam_reels.findFirst({
+            where: {
+              OR: [
+                { wp_post_id: postWpIdStr },
+                ...(postTitleTrimmed ? [{ wp_post_title: postTitleTrimmed }] : []),
+                ...(post.link ? [{ wp_post_url: post.link }] : [])
+              ]
+            },
+            select: { id: true, page_id: true }
+          });
+          if (alreadyInReelsGlobally) {
+            continue;
+          }
+
+          const alreadyInReelHistoryGlobally = await this.prisma.ztteam_reel_history.findFirst({
+            where: { wp_post_id: postWpIdStr },
+            select: { id: true, page_id: true }
+          });
+          if (alreadyInReelHistoryGlobally) {
+            continue;
+          }
 
           /** 2. Kiểm tra tuổi của bài viết */
           if (maxAgeDays > 0 && post.date) {
@@ -694,107 +923,11 @@ export class ZTTeamWordpressService {
             }
           }
 
-          /** 3. Tạo ID và thư mục lưu trữ bài viết */
-          const newImageId = crypto.randomUUID();
-          const targetDir = ztteam_getImagesPath(newImageId);
-          fs.mkdirSync(targetDir, { recursive: true });
-
-          /** 4. Tải ảnh chuẩn có sẵn của bài viết từ WordPress (KHÔNG render AI tạo ảnh) */
-          let localImageUrl = '';
-          if (post.imageUrl) {
-            try {
-              let imgUrl = post.imageUrl;
-              if (imgUrl.startsWith('//')) imgUrl = 'https:' + imgUrl;
-              else if (imgUrl.startsWith('/')) imgUrl = site.wp_url.replace(/\/$/, '') + imgUrl;
-
-              const imgRes = await axios.get(imgUrl, {
-                responseType: 'arraybuffer',
-                timeout: 15000,
-                headers: {
-                  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                  'Referer': site.wp_url,
-                }
-              });
-
-              const buf = Buffer.from(imgRes.data);
-              const outPath = path.join(targetDir, 'output.png');
-              const origPath = path.join(targetDir, 'source_original.png');
-
-              try {
-                await sharp(buf).png().toFile(outPath);
-              } catch {
-                fs.writeFileSync(outPath, buf);
-              }
-              fs.writeFileSync(origPath, buf);
-
-              localImageUrl = `/storage/images/${newImageId}/output.png`;
-            } catch (dlErr: any) {
-              this.logger.warn(`Không thể tải ảnh chuẩn từ WP (${post.imageUrl}): ${dlErr.message}`);
-            }
+          /** 3. Nhập bài viết độc quyền cho Fanpage */
+          const imported = await this.ztteam_importPostToPage(page, site, post);
+          if (imported) {
+            totalSynced++;
           }
-
-          if (!localImageUrl) {
-            this.logger.warn(`Bài viết #${post.id} ("${post.title}") không có ảnh đại diện khả dụng, bỏ qua để đảm bảo chất lượng video.`);
-            continue;
-          }
-
-          /** 5. Chuẩn bị Caption và First Comment chuẩn News Publisher */
-          const titleUpper = (post.title || '').trim().toUpperCase();
-          const rawExcerpt = post.excerpt || post.content || '';
-          const cleanSnippet = rawExcerpt.substring(0, 500).trim();
-          let fanpageCaption = `${titleUpper}\n\n${cleanSnippet}\n\n${ZTTEAM_NEWS_CAPTION_CTA}`;
-          if (page.add_link_to_caption) {
-            fanpageCaption += `\n\nFull story: ${post.link}`;
-          }
-          const firstCommentText = ztteam_getNewsComment(post.link);
-
-          const shouldRenderVideo = page.post_format === 'reel' || page.post_format === 'mixed';
-
-          /** 6. Tạo bản ghi bài viết trong database */
-          const imgRecord = await this.prisma.ztteam_images.create({
-            data: {
-              id: newImageId,
-              page_id: page.id,
-              wp_post_id: post.id.toString(),
-              wp_post_title: post.title || 'Bài viết',
-              wp_post_url: post.link,
-              template_id: 'wp_standard_image',
-              image_url: localImageUrl,
-              ai_caption: fanpageCaption,
-              ai_first_comment: firstCommentText,
-              comment_step: 0,
-              status: 'COMPLETED', /** Ảnh đã chuẩn, sẵn sàng! */
-              video_status: shouldRenderVideo ? 'PENDING' : 'NONE',
-              video_engine: page.video_engine || 'hook_image',
-            }
-          });
-
-          /** 7. Lưu vào lịch sử để không bao giờ lấy lại bài này */
-          await this.prisma.ztteam_image_history.upsert({
-            where: {
-              page_id_wp_post_id: {
-                page_id: page.id,
-                wp_post_id: post.id.toString(),
-              }
-            },
-            create: {
-              page_id: page.id,
-              wp_post_id: post.id.toString(),
-            },
-            update: {},
-          });
-
-          this.eventEmitter.emit('image.updated', imgRecord);
-
-          /** 8. Kích hoạt Render Hook Video ngay lập tức */
-          if (shouldRenderVideo) {
-            this.hookVideoService.ztteam_renderHookVideo(newImageId).catch(err => {
-              this.logger.error(`Render video thất bại cho bài ${newImageId}: ${err.message}`);
-            });
-          }
-
-          totalSynced++;
-          this.logger.log(`[WP Auto-Sync] Đã đồng bộ thành công bài "${post.title}" (ID: ${post.id}) vào Fanpage "${page.name}"`);
         }
       } catch (siteErr: any) {
         this.logger.error(`Lỗi quét bài từ website ${site.wp_url} cho Fanpage ${page.name}: ${siteErr.message}`);
@@ -881,11 +1014,41 @@ export class ZTTeamWordpressService {
     for (const post of posts) {
       if (totalSynced >= batchSize) break;
 
-      /** Kiểm tra đã có bài này trong hệ thống chưa */
-      const existing = await this.prisma.ztteam_images.findFirst({
-        where: { wp_post_id: post.id.toString() }
+      /** Kiểm tra đã có bài này trong hệ thống chưa (Toàn cục cả images, image_history, reels, reel_history, và title) */
+      const sitePostWpIdStr = post.id.toString();
+      const sitePostTitleTrimmed = (post.title || '').trim();
+
+      const existingInImages = await this.prisma.ztteam_images.findFirst({
+        where: {
+          OR: [
+            { wp_post_id: sitePostWpIdStr },
+            ...(sitePostTitleTrimmed ? [{ wp_post_title: sitePostTitleTrimmed }] : []),
+            ...(post.link ? [{ wp_post_url: post.link }] : [])
+          ]
+        }
       });
-      if (existing) continue;
+      if (existingInImages) continue;
+
+      const existingHistory = await this.prisma.ztteam_image_history.findFirst({
+        where: { wp_post_id: sitePostWpIdStr }
+      });
+      if (existingHistory) continue;
+
+      const existingInReels = await this.prisma.ztteam_reels.findFirst({
+        where: {
+          OR: [
+            { wp_post_id: sitePostWpIdStr },
+            ...(sitePostTitleTrimmed ? [{ wp_post_title: sitePostTitleTrimmed }] : []),
+            ...(post.link ? [{ wp_post_url: post.link }] : [])
+          ]
+        }
+      });
+      if (existingInReels) continue;
+
+      const existingInReelHistory = await this.prisma.ztteam_reel_history.findFirst({
+        where: { wp_post_id: sitePostWpIdStr }
+      });
+      if (existingInReelHistory) continue;
 
       const newImageId = crypto.randomUUID();
       const targetDir = ztteam_getImagesPath(newImageId);
@@ -1049,6 +1212,12 @@ export class ZTTeamWordpressService {
     let successfulPages = 0;
     let skippedNoSourcePages = 0;
 
+    /** 1. Tự động dọn dẹp các bài trùng lặp chưa đăng đang tồn đọng trong database */
+    await this.ztteam_autoCleanupDuplicatesBeforeSync();
+
+    /** 2. Gom nhóm các Fanpage ứng viên theo Website WordPress nguồn */
+    const siteToPagesMap = new Map<string, { site: any; pages: any[] }>();
+
     for (const page of candidatePages) {
       const activeSources = (page.sources || []).filter((s: any) => s.is_active && s.target_site_id);
       if (activeSources.length === 0) {
@@ -1056,18 +1225,159 @@ export class ZTTeamWordpressService {
         continue;
       }
 
-      try {
-        const res = await this.ztteam_syncPostsForPage(page.id, {
-          maxBatch: maxBatch || 2,
-          forceSync: true,
-          userId
-        });
-        if (res.count > 0) {
-          totalPostsSynced += res.count;
+      for (const src of activeSources) {
+        if (!siteToPagesMap.has(src.target_site_id)) {
+          const site = await this.prisma.ztteam_target_sites.findUnique({
+            where: { id: src.target_site_id }
+          });
+          if (site && site.status === 'active') {
+            siteToPagesMap.set(src.target_site_id, { site, pages: [] });
+          }
         }
-        successfulPages++;
-      } catch (err: any) {
-        this.logger.error(`Bulk sync failed for page ${page.name} (${page.id}): ${err.message}`);
+        const entry = siteToPagesMap.get(src.target_site_id);
+        if (entry && !entry.pages.some((p: any) => p.id === page.id)) {
+          entry.pages.push(page);
+        }
+      }
+    }
+
+    /** 3. Phân phối tập trung độc quyền (Centralized Disjoint Distribution) cho từng Website */
+    for (const [siteId, { site, pages: sitePages }] of siteToPagesMap.entries()) {
+      if (!sitePages || sitePages.length === 0) continue;
+
+      // Thu thập toàn bộ ID, Tiêu đề, URL bài viết ĐÃ TỒN TẠI trên toàn hệ thống
+      const usedPostIds = new Set<string>();
+      const usedTitles = new Set<string>();
+      const usedUrls = new Set<string>();
+
+      const allImages = await this.prisma.ztteam_images.findMany({
+        select: { wp_post_id: true, wp_post_title: true, wp_post_url: true }
+      });
+      allImages.forEach(img => {
+        if (img.wp_post_id) usedPostIds.add(img.wp_post_id.trim());
+        if (img.wp_post_title) usedTitles.add(this.ztteam_normalizeTitle(img.wp_post_title));
+        if (img.wp_post_url) usedUrls.add(img.wp_post_url.trim().toLowerCase());
+      });
+
+      const allImgHistory = await this.prisma.ztteam_image_history.findMany({
+        select: { wp_post_id: true }
+      });
+      allImgHistory.forEach(h => {
+        if (h.wp_post_id) usedPostIds.add(h.wp_post_id.trim());
+      });
+
+      const allReels = await this.prisma.ztteam_reels.findMany({
+        select: { wp_post_id: true, wp_post_title: true, wp_post_url: true }
+      });
+      allReels.forEach(r => {
+        if (r.wp_post_id) usedPostIds.add(r.wp_post_id.trim());
+        if (r.wp_post_title) usedTitles.add(this.ztteam_normalizeTitle(r.wp_post_title));
+        if (r.wp_post_url) usedUrls.add(r.wp_post_url.trim().toLowerCase());
+      });
+
+      const allReelHistory = await this.prisma.ztteam_reel_history.findMany({
+        select: { wp_post_id: true }
+      });
+      allReelHistory.forEach(rh => {
+        if (rh.wp_post_id) usedPostIds.add(rh.wp_post_id.trim());
+      });
+
+      // Tổng số bài cần lấy cho tất cả các Page thuộc site này
+      const targetBatchPerSitePage = maxBatch || 2;
+      const totalPostsNeeded = sitePages.length * targetBatchPerSitePage;
+
+      // Quét kho bài WordPress (phân trang để luôn lấy đủ bài mới 100% chưa ai dùng)
+      const availableUnusedPosts: any[] = [];
+      let pageNum = 1;
+      const maxPagesToFetch = 15; // Quét tối đa 15 trang lưu trữ
+
+      while (availableUnusedPosts.length < totalPostsNeeded && pageNum <= maxPagesToFetch) {
+        try {
+          const ownerUserId = site.owner_user_id || userId;
+          const fetchedPosts = await this.ztteam_getPosts(site.id, ownerUserId, undefined, undefined, pageNum, 50);
+          if (!fetchedPosts || fetchedPosts.length === 0) {
+            break; // Đã hết bài trên WordPress
+          }
+
+          for (const post of fetchedPosts) {
+            const idStr = post.id.toString().trim();
+            const normTitle = (post as any).cleanTitle || this.ztteam_normalizeTitle(post.title);
+            const normUrl = (post.link || '').trim().toLowerCase();
+
+            // Kiểm tra loại trừ bài đã từng dùng
+            if (usedPostIds.has(idStr) || (normTitle && usedTitles.has(normTitle)) || (normUrl && usedUrls.has(normUrl))) {
+              continue;
+            }
+
+            // Bài viết 100% MỚI
+            availableUnusedPosts.push(post);
+            usedPostIds.add(idStr);
+            if (normTitle) usedTitles.add(normTitle);
+            if (normUrl) usedUrls.add(normUrl);
+
+            if (availableUnusedPosts.length >= totalPostsNeeded) {
+              break;
+            }
+          }
+
+          pageNum++;
+        } catch (fetchErr: any) {
+          this.logger.error(`Lỗi quét bài từ WordPress ${site.wp_url} (trang ${pageNum}): ${fetchErr.message}`);
+          break;
+        }
+      }
+
+      this.logger.log(`[Đồng Bộ Độc Quyền] Website ${site.wp_url}: Tìm thấy ${availableUnusedPosts.length} bài mới chưa từng dùng cho ${sitePages.length} Fanpage.`);
+
+      // 4. Chia mảng bài viết riêng biệt (Disjoint Slices) cho từng Fanpage
+      // Mỗi bài viết được giao độc quyền cho ĐÚNG 1 Fanpage!
+      for (const page of sitePages) {
+        const batchForThisPage = maxBatch || page.auto_scan_batch_size || 2;
+        const pagePosts = availableUnusedPosts.splice(0, batchForThisPage);
+
+        if (pagePosts.length === 0) {
+          continue;
+        }
+
+        // 5. ATOMIC PRE-RESERVATION LOCK: Khóa bài tức thì vào ztteam_image_history
+        for (const p of pagePosts) {
+          await this.prisma.ztteam_image_history.upsert({
+            where: {
+              page_id_wp_post_id: {
+                page_id: page.id,
+                wp_post_id: p.id.toString(),
+              }
+            },
+            create: {
+              page_id: page.id,
+              wp_post_id: p.id.toString(),
+            },
+            update: {},
+          });
+        }
+
+        // 6. Nhập bài viết và tải ảnh
+        let pageSynced = 0;
+        for (const post of pagePosts) {
+          try {
+            const success = await this.ztteam_importPostToPage(page, site, post);
+            if (success) {
+              pageSynced++;
+              totalPostsSynced++;
+            }
+          } catch (impErr: any) {
+            this.logger.error(`Lỗi nhập bài #${post.id} cho Page ${page.name}: ${impErr.message}`);
+          }
+        }
+
+        if (pageSynced > 0) {
+          successfulPages++;
+        }
+
+        await this.prisma.ztteam_pages.update({
+          where: { id: page.id },
+          data: { last_auto_scan_at: new Date() }
+        });
       }
     }
 

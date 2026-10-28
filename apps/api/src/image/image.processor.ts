@@ -354,27 +354,42 @@ export class ZTTeamImageProcessor implements OnModuleInit {
     let finalCaption = image.ai_caption;
     let finalComment = image.ai_first_comment;
 
-    /** ZTTeam: Nếu caption hoặc comment chưa chuẩn, tự động trích xuất định dạng Facebook Viral từ WordPress */
+    /** ZTTeam: Nếu caption hoặc comment chưa chuẩn, tự động sinh theo chuẩn True-Crime Cold Case */
     if (!isCurrentCaptionValid || !isCurrentCommentValid) {
       const storyTitle = wpPostData?.title?.rendered || image.wp_post_title || '';
-      const titleUppercase = storyTitle.toUpperCase();
       let rawContent = '';
       if (wpPostData?.content?.rendered) {
         rawContent = wpPostData.content.rendered.replace(/<[^>]+>/g, ' ').trim();
       } else {
         rawContent = storyContent;
       }
-
-      const { part1, part2 } = this.ztteam_extractStoryParts(rawContent, 900, 700);
       const postUrl = wpPostData?.link || image.wp_post_url || '';
 
-      if (!isCurrentCaptionValid) {
-        const captionCTA = ZTTEAM_NEWS_CAPTION_CTA;
-        finalCaption = part1 ? `${titleUppercase}\n\n${part1}\n\n${captionCTA}` : `${titleUppercase}\n\n${captionCTA}`;
-      }
-
-      if (!isCurrentCommentValid) {
-        finalComment = ztteam_getNewsComment(postUrl);
+      try {
+        const pagePrompt = (image.page as any)?.ai_custom_prompt || null;
+        const coldCase = await this.aiService.ztteam_generateColdCaseContent(
+          storyTitle,
+          rawContent,
+          pagePrompt,
+          postUrl
+        );
+        if (!isCurrentCaptionValid) {
+          finalCaption = coldCase.fullCaption;
+        }
+        if (!isCurrentCommentValid) {
+          finalComment = coldCase.commentText;
+        }
+      } catch (aiErr: any) {
+        this.logger.warn(`AI Cold Case generation error in image.processor, using fallback: ${aiErr.message}`);
+        const titleUppercase = storyTitle.toUpperCase();
+        const { part1 } = this.ztteam_extractStoryParts(rawContent, 900, 700);
+        if (!isCurrentCaptionValid) {
+          const captionCTA = ZTTEAM_NEWS_CAPTION_CTA;
+          finalCaption = part1 ? `${titleUppercase}\n\n${part1}\n\n${captionCTA}` : `${titleUppercase}\n\n${captionCTA}`;
+        }
+        if (!isCurrentCommentValid) {
+          finalComment = ztteam_getNewsComment(postUrl);
+        }
       }
     }
 

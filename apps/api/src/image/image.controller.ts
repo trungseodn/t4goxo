@@ -51,11 +51,72 @@ export class ZTTeamImageController {
     @Body() body: { pageId: string; wpPostId: string; wpPostTitle: string; wpPostUrl?: string; templateId: string },
   ) {
     const page = await this.prisma.ztteam_pages.findFirst({
-      where: { fb_page_id: body.pageId }
+      where: {
+        OR: [
+          { fb_page_id: body.pageId },
+          { id: body.pageId }
+        ]
+      }
     });
 
     if (!page) {
-      throw new Error(`Page ${body.pageId} not found in system`);
+      throw new BadRequestException(`Không tìm thấy Fanpage ${body.pageId} trong hệ thống`);
+    }
+
+    /** Kiểm tra toàn cục tuyệt đối: Bài viết không được trùng lặp trên bất kỳ Fanpage nào */
+    const wpIdStr = body.wpPostId.toString();
+    const titleTrimmed = (body.wpPostTitle || '').trim();
+
+    const existingInImages = await this.prisma.ztteam_images.findFirst({
+      where: {
+        OR: [
+          { wp_post_id: wpIdStr },
+          ...(titleTrimmed ? [{ wp_post_title: titleTrimmed }] : []),
+          ...(body.wpPostUrl ? [{ wp_post_url: body.wpPostUrl }] : [])
+        ]
+      },
+      include: { page: true }
+    });
+    if (existingInImages) {
+      throw new BadRequestException(
+        `Bài viết #${body.wpPostId} này đã tồn tại trong hàng đợi bài viết (thuộc Page "${existingInImages.page?.name || existingInImages.page_id || 'Kho thủ công'}"). Tuyệt đối không thể tạo trùng lặp.`
+      );
+    }
+
+    const existingInHistory = await this.prisma.ztteam_image_history.findFirst({
+      where: { wp_post_id: wpIdStr },
+      include: { page: true }
+    });
+    if (existingInHistory) {
+      throw new BadRequestException(
+        `Bài viết #${body.wpPostId} này đã từng được sử dụng cho Page "${existingInHistory.page?.name || existingInHistory.page_id}". Tuyệt đối không thể tạo trùng lặp.`
+      );
+    }
+
+    const existingInReels = await this.prisma.ztteam_reels.findFirst({
+      where: {
+        OR: [
+          { wp_post_id: wpIdStr },
+          ...(titleTrimmed ? [{ wp_post_title: titleTrimmed }] : []),
+          ...(body.wpPostUrl ? [{ wp_post_url: body.wpPostUrl }] : [])
+        ]
+      },
+      include: { page: true }
+    });
+    if (existingInReels) {
+      throw new BadRequestException(
+        `Bài viết #${body.wpPostId} này đã tồn tại trong hàng đợi Reel (thuộc Page "${existingInReels.page?.name || existingInReels.page_id}"). Tuyệt đối không thể tạo trùng lặp.`
+      );
+    }
+
+    const existingInReelHistory = await this.prisma.ztteam_reel_history.findFirst({
+      where: { wp_post_id: wpIdStr },
+      include: { page: true }
+    });
+    if (existingInReelHistory) {
+      throw new BadRequestException(
+        `Bài viết #${body.wpPostId} này đã từng được tạo Reel cho Page "${existingInReelHistory.page?.name || existingInReelHistory.page_id}". Tuyệt đối không thể tạo trùng lặp.`
+      );
     }
 
     const image = await this.prisma.ztteam_images.create({
@@ -391,6 +452,168 @@ export class ZTTeamImageController {
    * ZTTeam: Đưa hàng loạt bài viết lỗi video Reel về hàng chờ tạo video
    * POST /api/image/retry-failed-videos
    */
+  /**
+   * ZTTeam: Tự động quét và dọn dẹp các bài viết trùng lặp đang nằm trong hàng đợi (chưa đăng)
+   * POST /api/image/cleanup-duplicates
+   */
+  @Post('cleanup-duplicates')
+  @UseGuards(ZTTeamAuthGuard)
+  async ztteam_cleanupDuplicates() {
+    let removedCount = 0;
+    const details: any[] = [];
+
+    // 1. Quét trùng lặp theo wp_post_id trong ztteam_images
+    const duplicatesById = await this.prisma.$queryRaw<Array<{ wp_post_id: string; cnt: number }>>`
+      SELECT wp_post_id, COUNT(*)::int as cnt
+      FROM ztteam_images
+      WHERE wp_post_id IS NOT NULL AND wp_post_id != ''
+      GROUP BY wp_post_id
+      HAVING COUNT(*) > 1
+    `;
+
+    for (const dup of duplicatesById) {
+      const allCopies = await this.prisma.ztteam_images.findMany({
+        where: { wp_post_id: dup.wp_post_id },
+        include: { page: true },
+        orderBy: [
+          { is_posted: 'desc' },
+          { created_at: 'asc' }
+        ]
+      });
+
+      const [primary, ...toRemove] = allCopies;
+
+      for (const item of toRemove) {
+        if (!item.is_posted) {
+          await this.prisma.ztteam_images.delete({ where: { id: item.id } });
+          removedCount++;
+          details.push({
+            type: 'image_by_id',
+            wpPostId: dup.wp_post_id,
+            removedId: item.id,
+            title: item.wp_post_title,
+            removedFromPage: item.page?.name || item.page_id || 'Kho thủ công',
+            keptOnPage: primary.page?.name || primary.page_id || 'Kho thủ công'
+          });
+        }
+      }
+    }
+
+    // 2. Quét trùng lặp theo Tiêu đề (wp_post_title) trong ztteam_images
+    const duplicatesByTitle = await this.prisma.$queryRaw<Array<{ clean_title: string; cnt: number }>>`
+      SELECT LOWER(TRIM(wp_post_title)) as clean_title, COUNT(*)::int as cnt
+      FROM ztteam_images
+      WHERE wp_post_title IS NOT NULL AND wp_post_title != ''
+      GROUP BY LOWER(TRIM(wp_post_title))
+      HAVING COUNT(*) > 1
+    `;
+
+    for (const dup of duplicatesByTitle) {
+      const allCopies = await this.prisma.ztteam_images.findMany({
+        where: {
+          wp_post_title: {
+            mode: 'insensitive',
+            equals: dup.clean_title
+          }
+        },
+        include: { page: true },
+        orderBy: [
+          { is_posted: 'desc' },
+          { created_at: 'asc' }
+        ]
+      });
+
+      if (allCopies.length > 1) {
+        const [primary, ...toRemove] = allCopies;
+        for (const item of toRemove) {
+          if (!item.is_posted) {
+            await this.prisma.ztteam_images.delete({ where: { id: item.id } });
+            removedCount++;
+            details.push({
+              type: 'image_by_title',
+              wpPostId: item.wp_post_id,
+              removedId: item.id,
+              title: item.wp_post_title,
+              removedFromPage: item.page?.name || item.page_id || 'Kho thủ công',
+              keptOnPage: primary.page?.name || primary.page_id || 'Kho thủ công'
+            });
+          }
+        }
+      }
+    }
+
+    // 3. Quét trùng lặp theo wp_post_id trong ztteam_reels
+    const duplicateReels = await this.prisma.$queryRaw<Array<{ wp_post_id: string; cnt: number }>>`
+      SELECT wp_post_id, COUNT(*)::int as cnt
+      FROM ztteam_reels
+      WHERE wp_post_id IS NOT NULL AND wp_post_id != ''
+      GROUP BY wp_post_id
+      HAVING COUNT(*) > 1
+    `;
+
+    for (const dup of duplicateReels) {
+      const allCopies = await this.prisma.ztteam_reels.findMany({
+        where: { wp_post_id: dup.wp_post_id },
+        include: { page: true },
+        orderBy: [
+          { is_posted: 'desc' },
+          { created_at: 'asc' }
+        ]
+      });
+
+      const [primary, ...toRemove] = allCopies;
+
+      for (const item of toRemove) {
+        if (!item.is_posted) {
+          await this.prisma.ztteam_reels.delete({ where: { id: item.id } });
+          removedCount++;
+          details.push({
+            type: 'reel_by_id',
+            wpPostId: dup.wp_post_id,
+            removedId: item.id,
+            title: item.wp_post_title,
+            removedFromPage: item.page?.name || item.page_id,
+            keptOnPage: primary.page?.name || primary.page_id
+          });
+        }
+      }
+    }
+
+    // 4. Quét trùng chéo giữa Images và Reels (Nếu Image đã có thì xóa Reel chưa đăng)
+    const crossDuplicates = await this.prisma.$queryRaw<Array<{ wp_post_id: string }>>`
+      SELECT DISTINCT img.wp_post_id
+      FROM ztteam_images img
+      JOIN ztteam_reels reel ON img.wp_post_id = reel.wp_post_id
+      WHERE reel.is_posted = false
+    `;
+
+    for (const cd of crossDuplicates) {
+      const reelsToDelete = await this.prisma.ztteam_reels.findMany({
+        where: { wp_post_id: cd.wp_post_id, is_posted: false },
+        include: { page: true }
+      });
+      for (const r of reelsToDelete) {
+        await this.prisma.ztteam_reels.delete({ where: { id: r.id } });
+        removedCount++;
+        details.push({
+          type: 'cross_reel_removed',
+          wpPostId: cd.wp_post_id,
+          removedId: r.id,
+          title: r.wp_post_title,
+          removedFromPage: r.page?.name || r.page_id,
+          keptOnPage: 'ztteam_images'
+        });
+      }
+    }
+
+    return {
+      success: true,
+      duplicateWpPostsCount: duplicatesById.length + duplicatesByTitle.length + duplicateReels.length,
+      removedUnpostedDuplicatesCount: removedCount,
+      details: details.slice(0, 100),
+    };
+  }
+
   @Post('retry-failed-videos')
   @UseGuards(ZTTeamAuthGuard)
   async ztteam_retryFailedVideos(@Body() body: { scope?: string; pageId?: string }) {
@@ -458,6 +681,26 @@ export class ZTTeamImageController {
 
     if (!image.page || !image.page.fb_page_id || !image.page_id) {
       throw new BadRequestException('Bài viết này không thuộc Fanpage Facebook nào để đăng tự động. Vui lòng đăng thủ công.');
+    }
+
+    /** Kiểm tra an toàn: Không cho phép đăng trùng nếu bài này đã được xuất bản ở Fanpage khác */
+    const imageTitleTrimmed = (image.wp_post_title || '').trim();
+    const alreadyPostedOtherPage = await this.prisma.ztteam_images.findFirst({
+      where: {
+        id: { not: image.id },
+        is_posted: true,
+        OR: [
+          { wp_post_id: image.wp_post_id },
+          ...(imageTitleTrimmed ? [{ wp_post_title: imageTitleTrimmed }] : [])
+        ]
+      },
+      include: { page: true }
+    });
+
+    if (alreadyPostedOtherPage) {
+      throw new BadRequestException(
+        `Bài viết này đã được đăng trên Fanpage "${alreadyPostedOtherPage.page?.name || alreadyPostedOtherPage.page_id}". Hệ thống chặn để tuyệt đối không đăng trùng lặp giữa các trang!`
+      );
     }
 
     const targetFbPageId = image.page.fb_page_id;
@@ -633,6 +876,50 @@ export class ZTTeamImageController {
     });
     this.eventEmitter.emit('image.updated', updated);
     return { success: true };
+  }
+
+  /**
+   * ZTTeam: Tạo lại Caption & First Comment theo chuẩn True-Crime Cold Case mới
+   * POST /api/image/:id/regenerate-cold-case
+   */
+  @Post(':id/regenerate-cold-case')
+  @UseGuards(ZTTeamAuthGuard)
+  async ztteam_regenerateColdCaseContent(@Param('id') id: string) {
+    const post = await this.prisma.ztteam_images.findUnique({
+      where: { id },
+      include: { page: true },
+    });
+    if (!post) {
+      throw new Error(`Không tìm thấy bài viết ${id}`);
+    }
+
+    const rawStory = post.ai_caption || post.wp_post_title || '';
+    const postUrl = post.wp_post_url || '';
+    const customPrompt = (post.page as any)?.ai_custom_prompt || null;
+
+    const coldCaseData = await this.aiService.ztteam_generateColdCaseContent(
+      post.wp_post_title || 'Cold Case',
+      rawStory,
+      customPrompt,
+      postUrl
+    );
+
+    const updated = await this.prisma.ztteam_images.update({
+      where: { id },
+      data: {
+        ai_caption: coldCaseData.fullCaption,
+        ai_first_comment: coldCaseData.commentText,
+      },
+    });
+
+    this.eventEmitter.emit('image.updated', updated);
+
+    return {
+      success: true,
+      caption: coldCaseData.fullCaption,
+      firstComment: coldCaseData.commentText,
+      coldCaseData,
+    };
   }
 
   /**

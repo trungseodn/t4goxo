@@ -156,17 +156,45 @@ export class ZTTeamRenderCron implements OnApplicationBootstrap {
             continue; /** Too old */
           }
 
-          /** Check if already processed (exists in history) */
-          const history = await this.prisma.ztteam_reel_history.findUnique({
-            where: {
-              page_id_wp_post_id: {
-                page_id: page.id,
-                wp_post_id: post.id.toString(),
-              },
-            },
-          });
+          /** Check if already processed globally across any page in reels, reel_history, images, image_history by ID, Title or URL */
+          const postWpIdStr = post.id.toString();
+          const postTitleTrimmed = (post.title || '').trim();
 
-          if (history) continue; /** Already processed */
+          const alreadyInReelsGlobally = await this.prisma.ztteam_reels.findFirst({
+            where: {
+              OR: [
+                { wp_post_id: postWpIdStr },
+                ...(postTitleTrimmed ? [{ wp_post_title: postTitleTrimmed }] : []),
+                ...(post.link ? [{ wp_post_url: post.link }] : [])
+              ]
+            },
+            select: { id: true, page_id: true }
+          });
+          if (alreadyInReelsGlobally) continue;
+
+          const alreadyInReelHistoryGlobally = await this.prisma.ztteam_reel_history.findFirst({
+            where: { wp_post_id: postWpIdStr },
+            select: { id: true, page_id: true }
+          });
+          if (alreadyInReelHistoryGlobally) continue;
+
+          const alreadyInImagesGlobally = await this.prisma.ztteam_images.findFirst({
+            where: {
+              OR: [
+                { wp_post_id: postWpIdStr },
+                ...(postTitleTrimmed ? [{ wp_post_title: postTitleTrimmed }] : []),
+                ...(post.link ? [{ wp_post_url: post.link }] : [])
+              ]
+            },
+            select: { id: true, page_id: true }
+          });
+          if (alreadyInImagesGlobally) continue;
+
+          const alreadyInImageHistoryGlobally = await this.prisma.ztteam_image_history.findFirst({
+            where: { wp_post_id: postWpIdStr },
+            select: { id: true, page_id: true }
+          });
+          if (alreadyInImageHistoryGlobally) continue;
 
           /** Check queue limit */
           const queueCount = await this.prisma.ztteam_reels.count({

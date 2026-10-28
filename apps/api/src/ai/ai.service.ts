@@ -4,6 +4,19 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 
 import { PrismaService } from '../prisma/prisma.service';
 
+export interface ZTTeamColdCaseResult {
+  topLabel: string;
+  hookHeadline: string;
+  yellowBanner: string;
+  body: string;
+  ending: string;
+  commentText: string;
+  hashtags: string[];
+  fullCaption: string;
+  videoBodyHtml: string;
+  paragraphs: string[];
+}
+
 /**
  * ZTTeamAIService — Provider adapter for AI text generation.
  * Currently supports OpenAI GPT. Expandable to Claude/Gemini via env config.
@@ -700,12 +713,302 @@ CRITICAL RULES:
    * Bám sát 100% cốt truyện thực tế của bài viết, cực kỳ kịch tính, lôi cuốn
    * Tự động highlight từ khóa cảm xúc bằng thẻ <span class="hl">...</span>
    */
+  /**
+   * ZTTeam: Tạo nội dung bài đăng Facebook & Video Reel theo chuẩn True-Crime Cold Case
+   * Gồm: 1. TOP LABEL, 2. HOOK HEADLINE, 3. YELLOW BANNER, 4. BODY (8-12 câu, [[...]] cho key lines),
+   * 5. ENDING cliffhanger, 6. COMMENT TEXT (120-180 từ tiết lộ kết quả + link), 7. 5 Hashtags
+   */
+  async ztteam_generateColdCaseContent(
+    title: string,
+    content: string,
+    customPrompt?: string | null,
+    postUrl?: string,
+  ): Promise<ZTTeamColdCaseResult> {
+    const cleanTitle = (title || '').replace(/<[^>]*>?/gm, '').trim();
+    const cleanContent = (content || '').replace(/<[^>]*>?/gm, '').replace(/\s+/g, ' ').trim();
+
+    const defaultSystemPrompt = `You are a true-crime storyteller who writes short, gripping cold-case posts for Facebook and Reels. Your style is serious, factual, and suspenseful.
+
+CASE INFO
+- Case Title: "${cleanTitle}"
+- Verified facts (use ONLY these):
+"""
+${cleanContent.substring(0, 4500)}
+"""
+
+OUTPUT STRUCTURE
+
+1. TOP LABEL (max 4 words): location/case type + year.
+   Examples: "UNSOLVED – 1982", "TEXAS 1986"
+
+2. HOOK HEADLINE (max 15 words): one paradox or time gap that raises a question the reader must answer.
+   Formulas: "[X] years later, [unexpected thing] revealed everything" /
+   "He confessed to [someone], but it was never reported"
+
+3. YELLOW BANNER (1 line): "[PLACE] [YEAR] Cold Case [Solved/Identified] After [X] Years — Justice for [Victim's full name]"
+
+4. BODY (8–12 short sentences):
+   - Chronological order. Optionally open with one flash-forward sentence
+     ("Thirty-eight years later, a dying man asked to speak to a priest…"),
+     then go back to the beginning.
+   - Start with an ordinary situation (a routine day, a normal errand).
+   - Include 3 strange, concrete, visual details taken from the facts
+     (objects, positions, clothing, small anomalies).
+   - Add 1 "suspicion seed": a tiny detail with no explanation
+     (e.g. "His wife never looked at him during the interview.")
+   - Add 1 "weight" sentence: a historical fact that raises the stakes
+     (e.g. "It was the first recorded case of its kind in the state.")
+   - Sentences are 8–15 words. Plain words, 6th–8th grade level.
+   - Neutral reporting tone. Few emotional adjectives. Let the details speak.
+   - Mark every 2nd–3rd sentence as a KEY LINE by wrapping it in [[double brackets]]
+     so I can highlight it yellow (e.g. [[Her car was found three days later, parked neatly with the engine running.]]).
+     Key lines must be the most dramatic ones, and they should tell the story on their own if read alone.
+
+5. ENDING: stop right before the answer is revealed with an open-ended cliffhanger
+   ("…but learning that would take forty years." / "…and finally revealed what he had kept hidden…").
+   Final line: "See more in the comments section below 👇"
+
+6. COMMENT TEXT (for the first comment): 120–180 words continuing the story
+   and revealing the resolution, with the same tone. End with a respectful
+   line honoring the victim.
+
+7. HASHTAGS: Exactly 5 relevant hashtags (e.g. #ColdCase #TrueCrime #JusticeServed #Unsolved #DNAEvidence).
+
+STRICT RULES
+- Do NOT invent details, dialogue, suspects, motives, or emotions. If a fact is missing, leave it out.
+- No graphic descriptions of violence or injuries. Imply, don't describe.
+- Treat the victim with dignity. Never blame or sensationalize.
+- Never name an unconvicted person as guilty. Use "suspect," "person of interest," or "told detectives."
+- If the facts are insufficient for a section, tell me what's missing instead of guessing.
+
+YOU MUST RETURN STRICTLY A SINGLE VALID JSON OBJECT WITH THIS EXACT STRUCTURE (NO EXTRA TEXT):
+{
+  "topLabel": "LOCATION YEAR",
+  "hookHeadline": "Headline paradox text here",
+  "yellowBanner": "Yellow banner single line here",
+  "body": "Sentence 1. [[Key line sentence 2.]] Sentence 3...",
+  "ending": "Cliffhanger sentence.\\n\\nSee more in the comments section below 👇",
+  "commentText": "Resolution comment text (120-180 words)...",
+  "hashtags": ["#ColdCase", "#TrueCrime", "#JusticeServed", "#Unsolved", "#DNAEvidence"]
+}`;
+
+    const promptToUse = customPrompt
+      ? `${customPrompt}\n\nCASE TITLE: ${cleanTitle}\nFACTS:\n${cleanContent.substring(0, 4500)}\n\nIMPORTANT: Return valid JSON matching the specified fields.`
+      : defaultSystemPrompt;
+
+    try {
+      const settings = await this.getSettings();
+      let rawResponse = '';
+
+      if (settings.activeProvider === 'gemini' && settings.geminiKey) {
+        rawResponse = await this.ztteam_callGeminiWithFallback(
+          settings.geminiKey,
+          promptToUse,
+          { jsonMode: true, temperature: 0.7, maxTokens: 2000 }
+        );
+      } else {
+        const OpenAI = require('openai').default;
+        const isDeepseek = settings.activeProvider === 'deepseek' && settings.deepseekKey;
+        const rawKey = isDeepseek ? settings.deepseekKey : settings.openaiKey;
+        const apiKey = (rawKey || '').trim();
+        const baseURL = isDeepseek ? 'https://api.deepseek.com' : undefined;
+        const modelName = isDeepseek ? 'deepseek-chat' : 'gpt-4o-mini';
+
+        if (apiKey) {
+          const openai = new OpenAI({ apiKey, baseURL });
+          const response = await openai.chat.completions.create({
+            model: modelName,
+            response_format: { type: 'json_object' },
+            messages: [
+              { role: 'user', content: promptToUse },
+            ],
+            max_tokens: 2000,
+            temperature: 0.7,
+          });
+          rawResponse = response.choices[0]?.message?.content || '{}';
+        }
+      }
+
+      const jsonResult = this.ztteam_safeParseJson(rawResponse);
+      if (jsonResult && (jsonResult.body || jsonResult.hookHeadline || jsonResult.commentText)) {
+        return this.ztteam_formatColdCaseResult(jsonResult, cleanTitle, cleanContent, postUrl);
+      }
+    } catch (err: any) {
+      this.logger.error(`Cold case AI generation error: ${err.message}`);
+    }
+
+    return this.ztteam_fallbackColdCaseExtract(cleanTitle, cleanContent, postUrl);
+  }
+
+  /**
+   * ZTTeam: Format and normalize cold case result
+   */
+  private ztteam_formatColdCaseResult(
+    jsonResult: any,
+    title: string,
+    content: string,
+    postUrl?: string,
+  ): ZTTeamColdCaseResult {
+    const topLabel = (jsonResult.topLabel || 'COLD CASE').trim();
+    const hookHeadline = (jsonResult.hookHeadline || title).trim();
+    const yellowBanner = (jsonResult.yellowBanner || `Cold Case Investigation — ${title}`).trim();
+    let body = (jsonResult.body || '').trim();
+    let ending = (jsonResult.ending || 'See more in the comments section below 👇').trim();
+    if (!ending.toLowerCase().includes('comments section below')) {
+      ending += '\n\nSee more in the comments section below 👇';
+    }
+
+    let commentText = (jsonResult.commentText || '').trim();
+    if (postUrl && !commentText.includes(postUrl)) {
+      commentText += `\n\n👉 Full Case Details: ${postUrl}`;
+    }
+
+    const defaultTags = ['#ColdCase', '#TrueCrime', '#JusticeServed', '#Unsolved', '#Investigation'];
+    const hashtags = Array.isArray(jsonResult.hashtags) && jsonResult.hashtags.length > 0
+      ? jsonResult.hashtags.map((t: string) => t.startsWith('#') ? t : `#${t}`).slice(0, 5)
+      : defaultTags;
+
+    const videoBodyHtml = body.replace(/\[\[(.*?)\]\]/gs, '<span class="hl">$1</span>');
+
+    let paragraphs = body
+      .split(/\n\s*\n/)
+      .map((p: string) => p.replace(/\[\[(.*?)\]\]/gs, '<span class="hl">$1</span>').trim())
+      .filter((p: string) => p.length > 0);
+
+    if (paragraphs.length < 2) {
+      const sentences = body.split(/(?<=[.!?])\s+/).filter((s: string) => s.trim().length > 0);
+      if (sentences.length >= 4) {
+        const chunkSize = Math.ceil(sentences.length / 3);
+        paragraphs = [
+          sentences.slice(0, chunkSize).join(' '),
+          sentences.slice(chunkSize, chunkSize * 2).join(' '),
+          sentences.slice(chunkSize * 2).join(' ')
+        ].map((p: string) => p.replace(/\[\[(.*?)\]\]/gs, '<span class="hl">$1</span>').trim()).filter(Boolean);
+      }
+    }
+
+    const fullCaption = [
+      topLabel,
+      hookHeadline,
+      yellowBanner,
+      body,
+      ending,
+      hashtags.join(' ')
+    ].filter(Boolean).join('\n\n');
+
+    return {
+      topLabel,
+      hookHeadline,
+      yellowBanner,
+      body,
+      ending,
+      commentText,
+      hashtags,
+      fullCaption,
+      videoBodyHtml,
+      paragraphs,
+    };
+  }
+
+  /**
+   * ZTTeam: Fallback extractor if AI API key is missing or fails
+   */
+  private ztteam_fallbackColdCaseExtract(
+    title: string,
+    content: string,
+    postUrl?: string,
+  ): ZTTeamColdCaseResult {
+    const cleanTitle = (title || 'Mysterious Disappearance').trim();
+    const cleanContent = (content || '').trim();
+
+    const topLabel = 'COLD CASE';
+    const hookHeadline = cleanTitle;
+    const yellowBanner = `Cold Case Investigation — ${cleanTitle}`;
+
+    const sentences = cleanContent.split(/(?<=[.!?])\s+/).filter((s: string) => s.length > 20);
+    const bodySentences = sentences.slice(0, 8);
+
+    const bodyFormatted = bodySentences.map((s: string, idx: number) => {
+      if ((idx + 1) % 3 === 0) {
+        return `[[${s.trim()}]]`;
+      }
+      return s.trim();
+    }).join(' ');
+
+    const ending = 'The truth remained hidden for decades, waiting for modern technology to bring justice.\n\nSee more in the comments section below 👇';
+
+    let commentText = sentences.slice(8, 14).join(' ');
+    if (!commentText || commentText.length < 50) {
+      commentText = `Investigators continued reviewing historical evidence, interviewing acquaintances, and testing recovered forensic materials. Today, modern forensic science continues to bring long-overdue answers to families who never gave up hope.`;
+    }
+    if (postUrl) {
+      commentText += `\n\n👉 Full Case Details: ${postUrl}`;
+    }
+
+    const hashtags = ['#ColdCase', '#TrueCrime', '#JusticeServed', '#Unsolved', '#Investigation'];
+    const body = bodyFormatted || cleanContent.substring(0, 600);
+    const videoBodyHtml = body.replace(/\[\[(.*?)\]\]/gs, '<span class="hl">$1</span>');
+    const paragraphs = [body.substring(0, 200), body.substring(200, 400), body.substring(400, 600)].map((p: string) => p.replace(/\[\[(.*?)\]\]/gs, '<span class="hl">$1</span>').trim()).filter(Boolean);
+
+    const fullCaption = [
+      topLabel,
+      hookHeadline,
+      yellowBanner,
+      body,
+      ending,
+      hashtags.join(' ')
+    ].filter(Boolean).join('\n\n');
+
+    return {
+      topLabel,
+      hookHeadline,
+      yellowBanner,
+      body,
+      ending,
+      commentText,
+      hashtags,
+      fullCaption,
+      videoBodyHtml,
+      paragraphs,
+    };
+  }
+
+  /**
+   * ZTTeam: Trích xuất các đoạn văn từ nội dung Cold Case đã có định dạng [[...]]
+   */
+  private ztteam_extractParagraphsFromColdCase(content: string): string[] {
+    const clean = (content || '').trim();
+    const lines = clean.split(/\n\s*\n/).filter(l => {
+      const trimmed = l.trim();
+      return trimmed.length > 30 && !trimmed.startsWith('#') && !trimmed.includes('See more in the comments');
+    });
+
+    const paragraphs: string[] = [];
+    for (const line of lines) {
+      if (line.includes('[[') || line.length > 50) {
+        paragraphs.push(line.replace(/\[\[(.*?)\]\]/gs, '<span class="hl">$1</span>').trim());
+      }
+    }
+    return paragraphs.length > 0 ? paragraphs : [clean.substring(0, 300)];
+  }
+
   async ztteam_generateReelHookStory(
     title: string,
     content: string,
   ): Promise<{ hookHtml: string; plainText: string; paragraphs: string[] }> {
     const cleanTitle = (title || '').replace(/<[^>]*>?/gm, '').trim();
     const cleanContent = (content || '').replace(/<[^>]*>?/gm, '').replace(/\s+/g, ' ').trim();
+
+    // 1. Nếu nội dung đầu vào đã có sẵn định dạng Cold Case với [[...]], trích xuất trực tiếp
+    if (cleanContent.includes('[[') && cleanContent.includes(']]')) {
+      const extracted = this.ztteam_extractParagraphsFromColdCase(cleanContent);
+      if (extracted && extracted.length >= 1) {
+        const finalParagraphs = extracted.slice(0, 3);
+        const hookHtml = finalParagraphs.map(p => `<p>${p}</p>`).join('\n');
+        const plainText = finalParagraphs.join('\n\n').replace(/<[^>]*>?/gm, '');
+        return { hookHtml, plainText, paragraphs: finalParagraphs };
+      }
+    }
 
     const systemPrompt = `You are a master viral Facebook Reel copywriter.
 Based strictly on the provided real story:
@@ -818,6 +1121,22 @@ CRITICAL REQUIREMENTS:
   ): Promise<{ hookQuote: string; paragraphs: string[]; plainText: string }> {
     const cleanTitle = (title || '').replace(/<[^>]*>?/gm, '').trim();
     const cleanContent = (content || '').replace(/<[^>]*>?/gm, '').replace(/\s+/g, ' ').trim();
+
+    // 1. Nếu nội dung đầu vào đã có sẵn định dạng Cold Case với [[...]], trích xuất trực tiếp
+    if (cleanContent.includes('[[') && cleanContent.includes(']]')) {
+      const chunks = cleanContent.split(/\n\s*\n/).filter(l => Boolean(l.trim()));
+      const hookQuote = chunks.find(l => l.length < 120 && !l.includes('[[') && !l.startsWith('#')) || cleanTitle;
+      const bodyLines = chunks.filter(l => l.includes('[[') || (l.length > 50 && !l.startsWith('#') && !l.includes('See more in the comments')));
+      if (bodyLines.length >= 2) {
+        const paragraphs = bodyLines.map(p => p.replace(/\[\[(.*?)\]\]/gs, '<span class="hl">$1</span>').trim());
+        const plainText = paragraphs.join('\n\n').replace(/<[^>]*>?/gm, '');
+        return {
+          hookQuote: `“${hookQuote.replace(/^["'“”]+|["'“”]+$/g, '')}”`,
+          paragraphs,
+          plainText,
+        };
+      }
+    }
 
     const systemPrompt = `You are a master viral Facebook Story copywriter specializing in high-suspense Text Story Reels.
 Based strictly on the provided real story:

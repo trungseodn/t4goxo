@@ -43,6 +43,9 @@ export default function ZTTeamAIPostCard({
   const [isExpanded, setIsExpanded] = useState(false);
   const [showVideo, setShowVideo] = useState(false);
   const [isMarkingPosted, setIsMarkingPosted] = useState(false);
+  const [captionText, setCaptionText] = useState(item.ai_caption || '');
+  const [firstCommentText, setFirstCommentText] = useState(item.ai_first_comment || '');
+  const [isRegeneratingColdCase, setIsRegeneratingColdCase] = useState(false);
   const { ztteam_showToast } = useUIStore();
 
   const isRendering = item.status === 'RENDERING' || item.status === 'PROCESSING' || item.status === 'QUEUED';
@@ -72,10 +75,29 @@ export default function ZTTeamAIPostCard({
 
   const ztteam_handleCopyComment = (e: React.MouseEvent) => {
     e.stopPropagation();
-    const commentText = item.ai_first_comment || (item.wp_post_url ? `Full story: ${item.wp_post_url}` : '');
+    const commentText = firstCommentText || item.ai_first_comment || (item.wp_post_url ? `Full story: ${item.wp_post_url}` : '');
     if (navigator.clipboard && commentText) {
       navigator.clipboard.writeText(commentText);
       ztteam_showToast('Đã sao chép Link bình luận vào bộ nhớ tạm!', 'success');
+    }
+  };
+
+  const ztteam_handleRegenerateColdCase = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      setIsRegeneratingColdCase(true);
+      const res = await api.post(`/image/${item.id}/regenerate-cold-case`);
+      if (res.data?.success) {
+        setCaptionText(res.data.caption);
+        setFirstCommentText(res.data.firstComment);
+        item.ai_caption = res.data.caption;
+        item.ai_first_comment = res.data.firstComment;
+        ztteam_showToast('Đã tạo lại nội dung Cold Case True-Crime thành công!', 'success');
+      }
+    } catch (err: any) {
+      ztteam_showToast(err.response?.data?.message || 'Lỗi tạo lại nội dung', 'error');
+    } finally {
+      setIsRegeneratingColdCase(false);
     }
   };
 
@@ -154,7 +176,8 @@ export default function ZTTeamAIPostCard({
     }
   };
 
-  const storyContent = item.ai_caption || item.final_caption || item.wp_post_title || 'Nội dung trích đoạn bài viết...';
+  const storyContent = captionText || item.ai_caption || item.final_caption || item.wp_post_title || 'Nội dung trích đoạn bài viết...';
+  const commentContent = firstCommentText || item.ai_first_comment || (item.wp_post_url ? `Full story: ${item.wp_post_url}` : 'Chưa có link bài viết');
   const displayTime = item.updated_at || item.created_at;
 
   return (
@@ -483,6 +506,19 @@ export default function ZTTeamAIPostCard({
               <span className="material-symbols-outlined text-[13px]">content_copy</span>
               <span>Copy Caption</span>
             </button>
+
+            <button
+              type="button"
+              onClick={ztteam_handleRegenerateColdCase}
+              disabled={isRegeneratingColdCase}
+              className="text-[11px] font-bold text-amber-400 hover:text-amber-300 flex items-center gap-1 px-2 py-0.5 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20 rounded-md transition-colors cursor-pointer"
+              title="Dùng AI viết lại Caption & Bình luận theo chuẩn True-Crime Cold Case mới"
+            >
+              <span className={`material-symbols-outlined text-[13px] ${isRegeneratingColdCase ? 'animate-spin' : ''}`}>
+                {isRegeneratingColdCase ? 'progress_activity' : 'psychology'}
+              </span>
+              <span>{isRegeneratingColdCase ? 'Đang viết...' : 'AI Cold Case'}</span>
+            </button>
           </div>
 
           {item.wp_post_url && (
@@ -537,7 +573,7 @@ export default function ZTTeamAIPostCard({
         </div>
 
         <p className="text-[11px] text-blue-200/90 bg-blue-950/40 p-2.5 rounded-lg border border-blue-500/20 select-all leading-relaxed font-mono break-all">
-          {item.ai_first_comment || (item.wp_post_url ? `Full story: ${item.wp_post_url}` : 'Chưa có link bài viết')}
+          {commentContent}
         </p>
       </div>
 

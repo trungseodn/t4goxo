@@ -36,6 +36,7 @@ export default function AIFactory() {
   });
   const [isLoading, setIsLoading] = useState(true);
   const [isRetryingBatch, setIsRetryingBatch] = useState(false);
+  const [isCleaningDuplicates, setIsCleaningDuplicates] = useState(false);
 
   /** Filter States */
   const [filterStatus, setFilterStatus] = useState('');
@@ -212,6 +213,31 @@ export default function AIFactory() {
     }
   };
 
+  /** Dọn dẹp bài viết trùng lặp toàn hệ thống */
+  const ztteam_handleCleanupDuplicates = async () => {
+    const confirmed = await ztteam_showConfirm(
+      'Dọn dẹp bài trùng lặp toàn hệ thống',
+      'Hệ thống sẽ quét toàn bộ bài viết chưa đăng có cùng ID WordPress hoặc Tiêu đề giữa các Fanpage, giữ lại 1 bài chính và xóa bỏ các bản sao trùng lặp. Bạn có chắc chắn muốn thực hiện?'
+    );
+    if (!confirmed) return;
+
+    try {
+      setIsCleaningDuplicates(true);
+      const res = await api.post('/image/cleanup-duplicates');
+      if (res.data?.success) {
+        ztteam_showToast(
+          `Đã dọn dẹp thành công ${res.data.removedUnpostedDuplicatesCount} bài trùng lặp (trên ${res.data.duplicateWpPostsCount} nhóm bài bị nhân bản)!`,
+          'success'
+        );
+        ztteam_loadItems(true);
+      }
+    } catch (err: any) {
+      ztteam_showToast(err.response?.data?.message || err.message || 'Lỗi khi dọn dẹp bài trùng', 'error');
+    } finally {
+      setIsCleaningDuplicates(false);
+    }
+  };
+
   /** Đưa hàng loạt bài lỗi video về hàng chờ */
   const ztteam_retryFailedVideosBatch = async (scope: 'unposted' | 'posted' | 'all') => {
     const scopeLabel = scope === 'unposted'
@@ -289,11 +315,35 @@ export default function AIFactory() {
           </p>
         </div>
 
-        {/** Tổng quan nhanh */}
-        <div className="flex items-center gap-3">
+        {/** Tổng quan nhanh & Thao tác */}
+        <div className="flex items-center gap-2.5 flex-wrap">
+          <button
+            type="button"
+            onClick={ztteam_handleCleanupDuplicates}
+            disabled={isCleaningDuplicates || isLoading}
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-amber-500/15 hover:bg-amber-500/25 text-amber-400 border border-amber-500/30 rounded-xl text-xs font-bold transition-all shadow-md cursor-pointer disabled:opacity-50"
+            title="Tự động quét và xóa sạch các bài viết trùng lặp giữa các Fanpage trên toàn hệ thống"
+          >
+            <span className={`material-symbols-outlined text-[16px] ${isCleaningDuplicates ? 'animate-spin' : ''}`}>
+              {isCleaningDuplicates ? 'sync' : 'auto_delete'}
+            </span>
+            <span>{isCleaningDuplicates ? 'Đang dọn...' : 'Dọn dẹp bài trùng'}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => ztteam_loadItems(true)}
+            disabled={isLoading}
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-fb-surface-hover hover:bg-fb-surface-hover/80 text-fb-text-muted hover:text-fb-text rounded-xl text-xs font-bold transition-colors cursor-pointer"
+            title="Làm mới danh sách bài viết"
+          >
+            <span className={`material-symbols-outlined text-[16px] ${isLoading ? 'animate-spin' : ''}`}>refresh</span>
+            <span>Làm mới</span>
+          </button>
+
           <div className="flex items-center gap-2 px-4 py-2 bg-fb-surface-hover/60 rounded-xl text-cyan-400 text-xs font-bold shrink-0 shadow-md">
             <span className="material-symbols-outlined text-base">inventory_2</span>
-            <span>Tổng số: {counts.total} bài viết</span>
+            <span>Tổng số: {counts.total} bài</span>
           </div>
         </div>
       </div>

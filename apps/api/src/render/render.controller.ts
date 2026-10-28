@@ -55,18 +55,64 @@ export class ZTTeamRenderController {
       return { error: 'Không tìm thấy Fanpage', code: 'NOT_FOUND' };
     }
 
-    /** Check if post was already used for this page */
-    const existing = await this.prisma.ztteam_reel_history.findUnique({
-      where: {
-        page_id_wp_post_id: {
-          page_id: page.id,
-          wp_post_id: body.wpPostId,
-        },
-      },
-    });
+    /** Kiểm tra xem bài viết đã từng được sử dụng trên BẤT KỲ Fanpage nào trong hệ thống hay chưa */
+    const postWpIdStr = body.wpPostId.toString();
+    const postTitleTrimmed = (body.wpPostTitle || '').trim();
 
-    if (existing) {
-      return { error: 'Bài viết này đã được tạo Reel cho Page này rồi', code: 'DUPLICATE' };
+    const existingInReels = await this.prisma.ztteam_reels.findFirst({
+      where: {
+        OR: [
+          { wp_post_id: postWpIdStr },
+          ...(postTitleTrimmed ? [{ wp_post_title: postTitleTrimmed }] : []),
+          ...(body.wpPostUrl ? [{ wp_post_url: body.wpPostUrl }] : [])
+        ]
+      },
+      include: { page: true }
+    });
+    if (existingInReels) {
+      return {
+        error: `Bài viết này đã tồn tại trong hàng đợi Reel (thuộc Page "${existingInReels.page?.name || existingInReels.page_id}"). Tuyệt đối không tạo trùng lặp.`,
+        code: 'DUPLICATE'
+      };
+    }
+
+    const existingInReelHistory = await this.prisma.ztteam_reel_history.findFirst({
+      where: { wp_post_id: postWpIdStr },
+      include: { page: true }
+    });
+    if (existingInReelHistory) {
+      return {
+        error: `Bài viết này đã từng được tạo Reel cho Page "${existingInReelHistory.page?.name || existingInReelHistory.page_id}". Tuyệt đối không tạo trùng lặp.`,
+        code: 'DUPLICATE'
+      };
+    }
+
+    const existingInImages = await this.prisma.ztteam_images.findFirst({
+      where: {
+        OR: [
+          { wp_post_id: postWpIdStr },
+          ...(postTitleTrimmed ? [{ wp_post_title: postTitleTrimmed }] : []),
+          ...(body.wpPostUrl ? [{ wp_post_url: body.wpPostUrl }] : [])
+        ]
+      },
+      include: { page: true }
+    });
+    if (existingInImages) {
+      return {
+        error: `Bài viết này đã tồn tại trong hàng đợi Bài viết (thuộc Page "${existingInImages.page?.name || existingInImages.page_id}"). Tuyệt đối không tạo trùng lặp.`,
+        code: 'DUPLICATE'
+      };
+    }
+
+    const existingInImageHistory = await this.prisma.ztteam_image_history.findFirst({
+      where: { wp_post_id: postWpIdStr },
+      include: { page: true }
+    });
+    if (existingInImageHistory) {
+      return {
+        error: `Bài viết này đã từng được dùng cho Page "${existingInImageHistory.page?.name || existingInImageHistory.page_id}". Tuyệt đối không tạo trùng lặp.`,
+        code: 'DUPLICATE'
+      };
     }
 
     /** Create the reel record */
@@ -468,6 +514,27 @@ export class ZTTeamRenderController {
 
       if (!reel.page) {
         throw new Error('Video Reel chưa được gán cho Fanpage nào');
+      }
+
+      /** Kiểm tra an toàn: Không cho phép đăng trùng lặp nếu bài này đã được xuất bản ở Fanpage khác */
+      const postTitleTrimmed = (reel.wp_post_title || '').trim();
+      const alreadyPostedOtherPage = await this.prisma.ztteam_reels.findFirst({
+        where: {
+          id: { not: reel.id },
+          is_posted: true,
+          OR: [
+            { wp_post_id: reel.wp_post_id },
+            ...(postTitleTrimmed ? [{ wp_post_title: postTitleTrimmed }] : [])
+          ]
+        },
+        include: { page: true }
+      });
+
+      if (alreadyPostedOtherPage) {
+        return {
+          error: `Reel này đã được xuất bản trên Fanpage "${alreadyPostedOtherPage.page?.name || alreadyPostedOtherPage.page_id}". Hệ thống chặn đăng trùng lặp để bảo vệ trang!`,
+          code: 'ALREADY_POSTED_ELSEWHERE'
+        };
       }
 
       const response = await this.facebookService.ztteam_publishReel(

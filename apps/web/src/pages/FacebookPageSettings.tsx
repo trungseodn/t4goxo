@@ -85,6 +85,7 @@ export default function FacebookPageSettings() {
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
   const [isUploadingCover, setIsUploadingCover] = useState(false);
   const [isApplyingBranding, setIsApplyingBranding] = useState(false);
+  const [isCleaningDuplicates, setIsCleaningDuplicates] = useState(false);
   const [brandingData, setBrandingData] = useState<{
     avatarUrl?: string;
     avatarLocalPath?: string;
@@ -460,6 +461,31 @@ export default function FacebookPageSettings() {
       ztteam_loadQueue();
     } catch (error: any) {
       ztteam_showToast(error.response?.data?.message || 'Lỗi thử lại', 'error');
+    }
+  };
+
+  /** Dọn dẹp các bài viết trùng lặp toàn hệ thống */
+  const ztteam_handleCleanupDuplicates = async () => {
+    const confirmed = await ztteam_showConfirm(
+      'Dọn dẹp bài trùng lặp toàn hệ thống',
+      'Hệ thống sẽ quét toàn bộ các bài viết chưa đăng có cùng ID bài viết WordPress giữa các Fanpage, giữ lại 1 bản sao chính và xóa bỏ các bản sao trùng lặp ở các Page khác. Bạn có chắc chắn muốn thực hiện?'
+    );
+    if (!confirmed) return;
+
+    try {
+      setIsCleaningDuplicates(true);
+      const res = await api.post('/image/cleanup-duplicates');
+      if (res.data?.success) {
+        ztteam_showToast(
+          `Đã dọn dẹp thành công ${res.data.removedUnpostedDuplicatesCount} bài viết trùng lặp (trên tổng số ${res.data.duplicateWpPostsCount} bài bị nhân bản)!`,
+          'success'
+        );
+        ztteam_loadQueue();
+      }
+    } catch (err: any) {
+      ztteam_showToast(err.response?.data?.message || err.message || 'Lỗi dọn dẹp bài trùng', 'error');
+    } finally {
+      setIsCleaningDuplicates(false);
     }
   };
 
@@ -1564,7 +1590,20 @@ export default function FacebookPageSettings() {
                 </div>
               </div>
 
-              <div className="flex items-center gap-3 self-end sm:self-auto">
+              <div className="flex items-center gap-2 self-end sm:self-auto flex-wrap">
+                <button
+                  type="button"
+                  onClick={ztteam_handleCleanupDuplicates}
+                  disabled={isCleaningDuplicates || isLoadingQueue}
+                  className="px-4 py-2 bg-amber-500/15 text-amber-400 hover:bg-amber-500/25 border border-amber-500/30 rounded-full text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  title="Tự động quét và xóa các bài viết trùng nhau giữa các Fanpage trong hàng đợi"
+                >
+                  <span className={`material-symbols-outlined text-[16px] ${isCleaningDuplicates ? 'animate-spin' : ''}`}>
+                    {isCleaningDuplicates ? 'sync' : 'auto_delete'}
+                  </span>
+                  <span>{isCleaningDuplicates ? 'Đang dọn...' : 'Dọn dẹp bài trùng'}</span>
+                </button>
+
                 <button
                   onClick={() => ztteam_loadQueue()}
                   disabled={isLoadingQueue}

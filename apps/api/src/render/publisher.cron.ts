@@ -130,65 +130,129 @@ export class ZTTeamPublisherCron {
           continue;
         }
 
-        /** Lấy bài đăng gần nhất (thành công HOẶC thất bại) của Page này để tính khoảng cách thời gian */
-        const lastPostedReel = await this.prisma.ztteam_reels.findFirst({
-          where: {
-            page_id: pageId,
-            OR: [{ is_posted: true }, { status: 'FAILED' }]
-          },
-          orderBy: { updated_at: 'desc' }
-        });
-        const lastPostedImage = await this.prisma.ztteam_images.findFirst({
-          where: {
-            page_id: pageId,
-            OR: [{ is_posted: true }, { status: 'FAILED' }]
-          },
-          orderBy: { updated_at: 'desc' }
-        });
+        /**
+         * ZTTeam: Lấy bài đăng thành công gần nhất của Page này dựa trên posted_at
+         * TUYỆT ĐỐI KHÔNG dùng updated_at vì LinkTracker hay Analytics chạy định kỳ sẽ làm sai lệch thời gian xuất bản thực tế.
+         */
+        const [lastPublishedReel, lastPublishedImage] = await Promise.all([
+          this.prisma.ztteam_reels.findFirst({
+            where: { page_id: pageId, is_posted: true, posted_at: { not: null } },
+            orderBy: { posted_at: 'desc' },
+            select: { posted_at: true },
+          }),
+          this.prisma.ztteam_images.findFirst({
+            where: { page_id: pageId, is_posted: true, posted_at: { not: null } },
+            orderBy: { posted_at: 'desc' },
+            select: { posted_at: true },
+          }),
+        ]);
 
         let lastPostTime: Date | null = null;
         let lastPostType: 'reel' | 'image' | null = null;
 
-        if (lastPostedReel) {
-          /** Dùng updated_at thay vì posted_at vì có thể nó là FAILED */
-          lastPostTime = new Date(lastPostedReel.updated_at);
+        if (lastPublishedReel?.posted_at) {
+          lastPostTime = new Date(lastPublishedReel.posted_at);
           lastPostType = 'reel';
         }
-        if (lastPostedImage) {
-          const imageTime = new Date(lastPostedImage.updated_at);
-          if (!lastPostTime || imageTime > lastPostTime) {
-            lastPostTime = imageTime;
+        if (lastPublishedImage?.posted_at) {
+          const imgDate = new Date(lastPublishedImage.posted_at);
+          if (!lastPostTime || imgDate > lastPostTime) {
+            lastPostTime = imgDate;
             lastPostType = 'image';
           }
         }
 
-        const diffMinutesFromLastPost = lastPostTime ? Math.floor((now.getTime() - lastPostTime.getTime()) / 60000) : Infinity;
+        /** Chống spam gọi API nếu vừa gặp lỗi đăng bài trong vòng 5 phút gần nhất */
+        const [lastFailedReel, lastFailedImage] = await Promise.all([
+          this.prisma.ztteam_reels.findFirst({
+            where: { page_id: pageId, status: 'FAILED' },
+            orderBy: { updated_at: 'desc' },
+            select: { updated_at: true },
+          }),
+          this.prisma.ztteam_images.findFirst({
+            where: { page_id: pageId, status: 'FAILED' },
+            orderBy: { updated_at: 'desc' },
+            select: { updated_at: true },
+          }),
+        ]);
+        let lastFailedTime: Date | null = null;
+        if (lastFailedReel) lastFailedTime = new Date(lastFailedReel.updated_at);
+        if (lastFailedImage) {
+          const fTime = new Date(lastFailedImage.updated_at);
+          if (!lastFailedTime || fTime > lastFailedTime) lastFailedTime = fTime;
+        }
+
+        if (lastFailedTime) {
+          const diffMinutesFromFailure = Math.floor((now.getTime() - lastFailedTime.getTime()) / 60000);
+          if (diffMinutesFromFailure < 5) {
+            this.logger.warn(`Page ${page.name}: Vừa gặp lỗi đăng bài cách đây ${diffMinutesFromFailure}m. Tạm dừng 5m để bảo vệ Fanpage.`);
+            continue;
+          }
+        }
+
+        const diffMinutesFromLastPost = lastPostTime
+          ? Math.floor((now.getTime() - lastPostTime.getTime()) / 60000)
+          : Infinity;
+
+        // Giãn cách tối thiểu giữa 2 bài đăng bất kỳ trên cùng 1 Page là 10 phút để tránh đăng dồn dập
+        if (diffMinutesFromLastPost < 10) {
+          this.logger.log(`Page ${page.name}: Vừa đăng bài cách đây ${diffMinutesFromLastPost}m (< 10m). Chờ giãn cách an toàn.`);
+          continue;
+        }
 
         let shouldPublish = false;
 
         if (schedule_mode === 'fixed') {
           if (schedule_fixed_times && Array.isArray(schedule_fixed_times) && schedule_fixed_times.length > 0) {
-            /** Luôn tính giờ và phút theo múi giờ chuẩn Việt Nam (Asia/Ho_Chi_Minh) */
-            const vnFormatter = new Intl.DateTimeFormat('en-US', {
+            /** Chuẩn hóa ngày & giờ theo múi giờ Việt Nam (Asia/Ho_Chi_Minh - UTC+7) */
+            const vnDateFormatter = new Intl.DateTimeFormat('en-CA', {
+              timeZone: 'Asia/Ho_Chi_Minh',
+              year: 'numeric',
+              month: '2-digit',
+              day: '2-digit',
+            });
+            const todayVnDate = vnDateFormatter.format(now);
+
+            const vnTimeFormatter = new Intl.DateTimeFormat('en-US', {
               timeZone: 'Asia/Ho_Chi_Minh',
               hour: 'numeric',
               minute: 'numeric',
               hour12: false,
             });
-            const parts = vnFormatter.formatToParts(now);
-            const vnH = parseInt(parts.find(p => p.type === 'hour')?.value || '0', 10);
-            const vnM = parseInt(parts.find(p => p.type === 'minute')?.value || '0', 10);
+            const nowParts = vnTimeFormatter.formatToParts(now);
+            const vnH = parseInt(nowParts.find(p => p.type === 'hour')?.value || '0', 10);
+            const vnM = parseInt(nowParts.find(p => p.type === 'minute')?.value || '0', 10);
             const currentMinutes = vnH * 60 + vnM;
+
+            // Xác định thời điểm bài đăng gần nhất theo ngày & phút tại VN
+            let isLastPostToday = false;
+            let lastPostVnMinutes = -1;
+            if (lastPostTime) {
+              const lastPostVnDate = vnDateFormatter.format(lastPostTime);
+              if (lastPostVnDate === todayVnDate) {
+                isLastPostToday = true;
+                const lpParts = vnTimeFormatter.formatToParts(lastPostTime);
+                const lpH = parseInt(lpParts.find(p => p.type === 'hour')?.value || '0', 10);
+                const lpM = parseInt(lpParts.find(p => p.type === 'minute')?.value || '0', 10);
+                lastPostVnMinutes = lpH * 60 + lpM;
+              }
+            }
 
             for (const time of schedule_fixed_times as string[]) {
               const [h, m] = time.split(':').map(Number);
               const fixedTimeMinutes = h * 60 + m;
 
-              /** ZTTeam: Mở rộng khung giờ từ 5 phút lên 45 phút để các Page xếp hàng tuần tự không bị lỡ lượt */
-              if (currentMinutes >= fixedTimeMinutes && currentMinutes < fixedTimeMinutes + 45) {
-                /** Nếu đã đăng cách đây chưa đầy 45 phút -> Khung giờ này đã được xử lý */
-                if (diffMinutesFromLastPost < 45) {
-                  this.logger.log(`Page ${page.name}: Slot ${time} already served (${diffMinutesFromLastPost}m ago). Skipping.`);
+              /**
+               * Cửa sổ xuất bản: từ giờ hẹn (fixedTimeMinutes) đến 60 phút sau.
+               * Giúp xử lý mượt mà khi hệ thống có hàng đợi nhiều page phải đăng tuần tự.
+               */
+              if (currentMinutes >= fixedTimeMinutes && currentMinutes < fixedTimeMinutes + 60) {
+                /**
+                 * Khung giờ này ĐÃ ĐƯỢC XUẤT BẢN hôm nay nếu có bài đăng sau thời điểm (fixedTimeMinutes - 5)
+                 */
+                const slotAlreadyServed = isLastPostToday && lastPostVnMinutes >= (fixedTimeMinutes - 5);
+                if (slotAlreadyServed) {
+                  this.logger.log(`Page ${page.name}: Khung giờ ${time} hôm nay đã xuất bản lúc ${Math.floor(lastPostVnMinutes / 60).toString().padStart(2, '0')}:${(lastPostVnMinutes % 60).toString().padStart(2, '0')}. Bỏ qua.`);
                   break;
                 }
                 shouldPublish = true;
@@ -202,7 +266,7 @@ export class ZTTeamPublisherCron {
           if (!lastPostTime || diffMinutesFromLastPost >= gapMinutes) {
             shouldPublish = true;
           } else {
-            this.logger.log(`Page ${page.name}: Waiting for gap (${diffMinutesFromLastPost}/${gapMinutes}m).`);
+            this.logger.log(`Page ${page.name}: Đang chờ đủ khoảng cách gap (${diffMinutesFromLastPost}/${gapMinutes}m).`);
           }
         }
 
@@ -286,8 +350,10 @@ export class ZTTeamPublisherCron {
        * 2. Nếu bằng nhau, ưu tiên bài viết được tạo sớm nhất (itemCreatedAt tăng dần)
        */
       eligibleCandidates.sort((a, b) => {
-        if (b.diffMinutesFromLastPost !== a.diffMinutesFromLastPost) {
-          return b.diffMinutesFromLastPost - a.diffMinutesFromLastPost;
+        const diffA = a.diffMinutesFromLastPost === Infinity ? 999999 : a.diffMinutesFromLastPost;
+        const diffB = b.diffMinutesFromLastPost === Infinity ? 999999 : b.diffMinutesFromLastPost;
+        if (diffB !== diffA) {
+          return diffB - diffA;
         }
         return a.itemCreatedAt - b.itemCreatedAt;
       });

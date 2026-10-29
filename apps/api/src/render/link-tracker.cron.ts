@@ -162,8 +162,8 @@ export class ZTTeamLinkViewTrackerCron {
                 last_view_checked_at: new Date(),
               },
             });
-          } else {
-            /** Cập nhật lượt xem gần nhất */
+          } else if (reel.current_views !== views) {
+            /** Cập nhật lượt xem gần nhất khi có thay đổi */
             await this.prisma.ztteam_reels.update({
               where: { id: reel.id },
               data: {
@@ -215,7 +215,7 @@ export class ZTTeamLinkViewTrackerCron {
                 last_view_checked_at: new Date(),
               },
             });
-          } else {
+          } else if (img.current_views !== views) {
             await this.prisma.ztteam_images.update({
               where: { id: img.id },
               data: {

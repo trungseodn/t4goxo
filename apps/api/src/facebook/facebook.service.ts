@@ -509,16 +509,16 @@ export class ZTTeamFacebookService {
     }
 
     const lastPublishedReel = await this.prisma.ztteam_reels.findFirst({
-      where: { page_id: page.id, status: 'POSTED' },
-      orderBy: { updated_at: 'desc' }
+      where: { page_id: page.id, is_posted: true, posted_at: { not: null } },
+      orderBy: { posted_at: 'desc' }
     });
     
     const lastPublishedImage = await this.prisma.ztteam_images.findFirst({
-      where: { page_id: page.id, is_posted: true },
+      where: { page_id: page.id, is_posted: true, posted_at: { not: null } },
       orderBy: { posted_at: 'desc' }
     });
 
-    let lastPublishTime = lastPublishedReel ? lastPublishedReel.updated_at : null;
+    let lastPublishTime = lastPublishedReel?.posted_at ? lastPublishedReel.posted_at : null;
     let lastPostTitle = lastPublishedReel?.wp_post_title || lastPublishedReel?.ai_caption || null;
     if (lastPublishedImage?.posted_at && (!lastPublishTime || lastPublishedImage.posted_at > lastPublishTime)) {
       lastPublishTime = lastPublishedImage.posted_at;

@@ -80,6 +80,7 @@ export default function FacebookPageSettings() {
   const [isLoadingQueue, setIsLoadingQueue] = useState(false);
   const [isPosting, setIsPosting] = useState<Record<string, boolean>>({});
   const [isSyncingWp, setIsSyncingWp] = useState(false);
+  const [syncNowBatchSize, setSyncNowBatchSize] = useState<number>(3);
 
   /** Branding State: Upload Avatar & Cover */
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
@@ -342,16 +343,17 @@ export default function FacebookPageSettings() {
   };
 
   /** Quét và đồng bộ bài viết trực tiếp từ Website WordPress ngay lập tức */
-  const ztteam_handleSyncWpNow = async () => {
+  const ztteam_handleSyncWpNow = async (count?: number) => {
     if (!id) return;
     const hasActiveSource = sources && sources.some((s: any) => s.target_site_id && s.is_active);
     if (!hasActiveSource) {
       ztteam_showToast('Vui lòng thêm và bật ít nhất 1 nguồn Website WordPress cho Fanpage này', 'warning');
       return;
     }
+    const batch = count || syncNowBatchSize || autoScanBatchSize || 3;
     try {
       setIsSyncingWp(true);
-      const res = await api.post(`/wordpress/sync-page-posts/${id}`);
+      const res = await api.post(`/wordpress/sync-page-posts/${id}`, { maxBatch: batch });
       if (res.data?.count > 0) {
         ztteam_showToast(res.data.message || `Đã đồng bộ thành công ${res.data.count} bài viết từ Web vào hàng đợi!`, 'success');
         ztteam_loadQueue();
@@ -1186,20 +1188,35 @@ export default function FacebookPageSettings() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
-                  <button
-                    type="button"
-                    onClick={ztteam_handleSyncWpNow}
-                    disabled={isSyncingWp}
-                    className="px-3 py-1.5 bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25 border border-emerald-500/30 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 disabled:opacity-50"
-                    title="Quét ngay các bài viết mới từ Website WordPress để tạo video vào hàng đợi"
-                  >
-                    {isSyncingWp ? (
-                      <span className="material-symbols-outlined text-[16px] animate-spin">sync</span>
-                    ) : (
-                      <span className="material-symbols-outlined text-[16px]">bolt</span>
-                    )}
-                    <span>{isSyncingWp ? 'Đang đồng bộ...' : 'Đồng bộ từ Web ngay'}</span>
-                  </button>
+                  <div className="flex items-center gap-1.5 bg-emerald-500/10 border border-emerald-500/30 rounded-lg p-0.5">
+                    <button
+                      type="button"
+                      onClick={() => ztteam_handleSyncWpNow(syncNowBatchSize)}
+                      disabled={isSyncingWp}
+                      className="px-3 py-1 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 rounded-md text-xs font-bold transition-all flex items-center gap-1.5 disabled:opacity-50"
+                      title="Quét ngay các bài viết mới từ Website WordPress để tạo video vào hàng đợi"
+                    >
+                      {isSyncingWp ? (
+                        <span className="material-symbols-outlined text-[16px] animate-spin">sync</span>
+                      ) : (
+                        <span className="material-symbols-outlined text-[16px]">bolt</span>
+                      )}
+                      <span>{isSyncingWp ? 'Đang đồng bộ...' : 'Đồng bộ từ Web ngay'}</span>
+                    </button>
+                    <select
+                      value={syncNowBatchSize}
+                      onChange={(e) => setSyncNowBatchSize(Number(e.target.value))}
+                      disabled={isSyncingWp}
+                      className="bg-slate-900 text-emerald-400 text-xs font-bold rounded px-1.5 py-1 border border-emerald-500/30 focus:outline-none cursor-pointer"
+                      title="Chọn số lượng bài viết cần lấy"
+                    >
+                      {[1, 2, 3, 5, 10, 20, 30, 50].map((n) => (
+                        <option key={n} value={n}>
+                          {n} bài
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                   <button
                     onClick={() => setSources([...sources, { target_site_id: '', target_category_id: '', target_tags: '', is_active: true }])}
                     className="px-3 py-1.5 bg-fb-blue/15 text-fb-blue hover:bg-fb-blue/25 rounded-lg text-xs font-bold transition-colors flex items-center gap-1 shrink-0"
@@ -1350,6 +1367,10 @@ export default function FacebookPageSettings() {
                           { value: '2', label: '2 bài / lượt' },
                           { value: '3', label: '3 bài / lượt (Khuyến nghị)' },
                           { value: '5', label: '5 bài / lượt' },
+                          { value: '10', label: '10 bài / lượt' },
+                          { value: '20', label: '20 bài / lượt' },
+                          { value: '30', label: '30 bài / lượt' },
+                          { value: '50', label: '50 bài / lượt' },
                         ]}
                       />
                     </div>
@@ -1364,6 +1385,9 @@ export default function FacebookPageSettings() {
                           { value: '5', label: 'Tối đa 5 bài chờ (Khuyến nghị)' },
                           { value: '10', label: 'Tối đa 10 bài chờ' },
                           { value: '20', label: 'Tối đa 20 bài chờ' },
+                          { value: '30', label: 'Tối đa 30 bài chờ' },
+                          { value: '50', label: 'Tối đa 50 bài chờ' },
+                          { value: '100', label: 'Tối đa 100 bài chờ' },
                         ]}
                       />
                     </div>

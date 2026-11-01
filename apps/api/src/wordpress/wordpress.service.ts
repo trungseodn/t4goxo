@@ -850,84 +850,101 @@ export class ZTTeamWordpressService {
 
       try {
         const ownerUserId = options?.userId || page.fb_account?.owner_user_id || site.owner_user_id;
-        const posts = await this.ztteam_getPosts(
-          source.target_site_id,
-          ownerUserId,
-          source.target_category_id || undefined,
-          source.target_tags || undefined
-        );
+        let pageNum = 1;
+        const maxPagesToFetch = 100; // Quét sâu đến 100 trang WP (10.000 bài) để luôn tìm ra bài mới
 
-        if (!posts || posts.length === 0) continue;
-
-        /** Sắp xếp bài cũ xuất bản trước (FIFO) */
-        const reversedPosts = [...posts].reverse();
-
-        for (const post of reversedPosts) {
-          if (totalSynced >= batchSize) break;
+        while (totalSynced < batchSize && pageNum <= maxPagesToFetch) {
           if (currentQueueCount + totalSynced >= queueLimit && !options?.forceSync) break;
 
-          /** 1. KIỂM TRA ĐỘC QUYỀN TOÀN CỤC: Tuyệt đối không cho phép 2 Fanpage lấy trùng cùng 1 bài viết */
-          const postWpIdStr = post.id.toString();
-          const postTitleTrimmed = (post.title || '').trim();
-
-          const alreadyInImagesGlobally = await this.prisma.ztteam_images.findFirst({
-            where: {
-              OR: [
-                { wp_post_id: postWpIdStr },
-                ...(postTitleTrimmed ? [{ wp_post_title: postTitleTrimmed }] : []),
-                ...(post.link ? [{ wp_post_url: post.link }] : [])
-              ]
-            },
-            select: { id: true, page_id: true }
-          });
-          if (alreadyInImagesGlobally) {
-            continue;
+          let posts: any[] = [];
+          try {
+            posts = await this.ztteam_getPosts(
+              source.target_site_id,
+              ownerUserId,
+              source.target_category_id || undefined,
+              source.target_tags || undefined,
+              pageNum,
+              100
+            );
+          } catch (wpErr: any) {
+            this.logger.log(`Kết thúc phân trang WordPress hoặc hết bài (trang ${pageNum}): ${wpErr.message}`);
+            break;
           }
 
-          const alreadyInHistoryGlobally = await this.prisma.ztteam_image_history.findFirst({
-            where: { wp_post_id: postWpIdStr },
-            select: { id: true, page_id: true }
-          });
-          if (alreadyInHistoryGlobally) {
-            continue;
-          }
+          if (!posts || posts.length === 0) break;
 
-          const alreadyInReelsGlobally = await this.prisma.ztteam_reels.findFirst({
-            where: {
-              OR: [
-                { wp_post_id: postWpIdStr },
-                ...(postTitleTrimmed ? [{ wp_post_title: postTitleTrimmed }] : []),
-                ...(post.link ? [{ wp_post_url: post.link }] : [])
-              ]
-            },
-            select: { id: true, page_id: true }
-          });
-          if (alreadyInReelsGlobally) {
-            continue;
-          }
+          /** Sắp xếp bài cũ xuất bản trước (FIFO) */
+          const reversedPosts = [...posts].reverse();
 
-          const alreadyInReelHistoryGlobally = await this.prisma.ztteam_reel_history.findFirst({
-            where: { wp_post_id: postWpIdStr },
-            select: { id: true, page_id: true }
-          });
-          if (alreadyInReelHistoryGlobally) {
-            continue;
-          }
+          for (const post of reversedPosts) {
+            if (totalSynced >= batchSize) break;
+            if (currentQueueCount + totalSynced >= queueLimit && !options?.forceSync) break;
 
-          /** 2. Kiểm tra tuổi của bài viết */
-          if (maxAgeDays > 0 && post.date) {
-            const postDate = new Date(post.date);
-            const diffDays = Math.ceil(Math.abs(now.getTime() - postDate.getTime()) / (1000 * 60 * 60 * 24));
-            if (diffDays > maxAgeDays && !options?.forceSync) {
+            /** 1. KIỂM TRA ĐỘC QUYỀN TOÀN CỤC: Tuyệt đối không cho phép 2 Fanpage lấy trùng cùng 1 bài viết */
+            const postWpIdStr = post.id.toString();
+            const postTitleTrimmed = (post.title || '').trim();
+
+            const alreadyInImagesGlobally = await this.prisma.ztteam_images.findFirst({
+              where: {
+                OR: [
+                  { wp_post_id: postWpIdStr },
+                  ...(postTitleTrimmed ? [{ wp_post_title: postTitleTrimmed }] : []),
+                  ...(post.link ? [{ wp_post_url: post.link }] : [])
+                ]
+              },
+              select: { id: true, page_id: true }
+            });
+            if (alreadyInImagesGlobally) {
               continue;
+            }
+
+            const alreadyInHistoryGlobally = await this.prisma.ztteam_image_history.findFirst({
+              where: { wp_post_id: postWpIdStr },
+              select: { id: true, page_id: true }
+            });
+            if (alreadyInHistoryGlobally) {
+              continue;
+            }
+
+            const alreadyInReelsGlobally = await this.prisma.ztteam_reels.findFirst({
+              where: {
+                OR: [
+                  { wp_post_id: postWpIdStr },
+                  ...(postTitleTrimmed ? [{ wp_post_title: postTitleTrimmed }] : []),
+                  ...(post.link ? [{ wp_post_url: post.link }] : [])
+                ]
+              },
+              select: { id: true, page_id: true }
+            });
+            if (alreadyInReelsGlobally) {
+              continue;
+            }
+
+            const alreadyInReelHistoryGlobally = await this.prisma.ztteam_reel_history.findFirst({
+              where: { wp_post_id: postWpIdStr },
+              select: { id: true, page_id: true }
+            });
+            if (alreadyInReelHistoryGlobally) {
+              continue;
+            }
+
+            /** 2. Kiểm tra tuổi của bài viết (chỉ áp dụng khi không phải forceSync) */
+            if (maxAgeDays > 0 && post.date && !options?.forceSync) {
+              const postDate = new Date(post.date);
+              const diffDays = Math.ceil(Math.abs(now.getTime() - postDate.getTime()) / (1000 * 60 * 60 * 24));
+              if (diffDays > maxAgeDays) {
+                continue;
+              }
+            }
+
+            /** 3. Nhập bài viết độc quyền cho Fanpage */
+            const imported = await this.ztteam_importPostToPage(page, site, post);
+            if (imported) {
+              totalSynced++;
             }
           }
 
-          /** 3. Nhập bài viết độc quyền cho Fanpage */
-          const imported = await this.ztteam_importPostToPage(page, site, post);
-          if (imported) {
-            totalSynced++;
-          }
+          pageNum++;
         }
       } catch (siteErr: any) {
         this.logger.error(`Lỗi quét bài từ website ${site.wp_url} cho Fanpage ${page.name}: ${siteErr.message}`);
@@ -1003,16 +1020,22 @@ export class ZTTeamWordpressService {
       throw new HttpException('Không tìm thấy Website WordPress', HttpStatus.NOT_FOUND);
     }
 
-    const posts = await this.ztteam_getPosts(site.id, userId, options?.categoryId, options?.targetTags);
-    if (!posts || posts.length === 0) {
-      return { success: true, count: 0, message: 'Website không có bài viết nào trong chuyên mục này' };
-    }
-
     const batchSize = options?.maxBatch || 5;
     let totalSynced = 0;
+    let pageNum = 1;
+    const maxPagesToFetch = 100;
 
-    for (const post of posts) {
-      if (totalSynced >= batchSize) break;
+    while (totalSynced < batchSize && pageNum <= maxPagesToFetch) {
+      let posts: any[] = [];
+      try {
+        posts = await this.ztteam_getPosts(site.id, userId, options?.categoryId, options?.targetTags, pageNum, 100);
+      } catch (e: any) {
+        break;
+      }
+      if (!posts || posts.length === 0) break;
+
+      for (const post of posts) {
+        if (totalSynced >= batchSize) break;
 
       /** Kiểm tra đã có bài này trong hệ thống chưa (Toàn cục cả images, image_history, reels, reel_history, và title) */
       const sitePostWpIdStr = post.id.toString();
@@ -1120,12 +1143,16 @@ export class ZTTeamWordpressService {
       });
 
       totalSynced++;
+      }
+      pageNum++;
     }
 
     return {
       success: true,
       count: totalSynced,
-      message: `Đã đồng bộ thành công ${totalSynced} bài viết vào Kho Đăng Thủ Công!`
+      message: totalSynced > 0
+        ? `Đã đồng bộ thành công ${totalSynced} bài viết vào Kho Đăng Thủ Công!`
+        : 'Không tìm thấy bài viết mới nào cần đồng bộ.'
     };
   }
 
@@ -1155,11 +1182,14 @@ export class ZTTeamWordpressService {
     let candidatePages: any[] = [];
 
     if (scope === 'bm' && bmName) {
+      const isPersonal = bmName === 'Tài Khoản Cá Nhân' || bmName.toLowerCase().includes('cá nhân');
       candidatePages = await this.prisma.ztteam_pages.findMany({
         where: {
           is_active: true,
           fb_account: {
-            business_name: bmName,
+            ...(isPersonal
+              ? { OR: [{ business_name: null }, { business_name: '' }, { business_name: bmName }] }
+              : { business_name: bmName }),
             ...(isAdmin ? {} : { owner_user_id: userId }),
           }
         },
@@ -1286,15 +1316,15 @@ export class ZTTeamWordpressService {
       const targetBatchPerSitePage = maxBatch || 2;
       const totalPostsNeeded = sitePages.length * targetBatchPerSitePage;
 
-      // Quét kho bài WordPress (phân trang để luôn lấy đủ bài mới 100% chưa ai dùng)
+      // Quét kho bài WordPress (phân trang sâu tự động để luôn lấy đủ bài mới 100% chưa ai dùng)
       const availableUnusedPosts: any[] = [];
       let pageNum = 1;
-      const maxPagesToFetch = 15; // Quét tối đa 15 trang lưu trữ
+      const maxPagesToFetch = 100; // Quét sâu tối đa 100 trang lưu trữ (10.000 bài viết)
 
       while (availableUnusedPosts.length < totalPostsNeeded && pageNum <= maxPagesToFetch) {
         try {
           const ownerUserId = site.owner_user_id || userId;
-          const fetchedPosts = await this.ztteam_getPosts(site.id, ownerUserId, undefined, undefined, pageNum, 50);
+          const fetchedPosts = await this.ztteam_getPosts(site.id, ownerUserId, undefined, undefined, pageNum, 100);
           if (!fetchedPosts || fetchedPosts.length === 0) {
             break; // Đã hết bài trên WordPress
           }
@@ -1322,7 +1352,7 @@ export class ZTTeamWordpressService {
 
           pageNum++;
         } catch (fetchErr: any) {
-          this.logger.error(`Lỗi quét bài từ WordPress ${site.wp_url} (trang ${pageNum}): ${fetchErr.message}`);
+          this.logger.log(`Kết thúc phân trang WordPress hoặc đạt giới hạn lưu trữ (trang ${pageNum}): ${fetchErr.message}`);
           break;
         }
       }

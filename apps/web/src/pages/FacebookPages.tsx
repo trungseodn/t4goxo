@@ -2417,26 +2417,64 @@ export default function FacebookPages() {
 
               {/** CẤU HÌNH SỐ LƯỢNG BÀI VIẾT ĐỒNG BỘ */}
               <div className="bg-fb-surface-hover/20 p-4 rounded-2xl border border-fb-surface-hover/40 space-y-3">
-                <label className="block text-xs font-bold text-emerald-400 uppercase tracking-wider">
-                  2. Số Lượng Bài Viết Đồng Bộ Mỗi Page
-                </label>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                  {[1, 2, 3, 5].map(num => (
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-bold text-emerald-400 uppercase tracking-wider">
+                    2. Số Lượng Bài Viết Đồng Bộ Mỗi Page
+                  </label>
+                  <span className="text-[11px] text-slate-400">
+                    Đang chọn: <b className="text-emerald-400 font-bold">{bulkSyncBatchSize}</b> bài / Page
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                  {[2, 5, 10, 20, 50].map(num => (
                     <button
                       key={num}
                       type="button"
                       onClick={() => setBulkSyncBatchSize(num)}
-                      className={`py-2 px-3 rounded-xl border text-center transition-all ${
+                      className={`py-2 px-2.5 rounded-xl border text-center transition-all ${
                         bulkSyncBatchSize === num
                           ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300 font-bold shadow-sm'
                           : 'bg-slate-800/40 border-slate-700/60 text-slate-400 hover:border-slate-500'
                       }`}
                     >
-                      <div className="text-sm font-bold">{num} bài / Page</div>
-                      <div className="text-[10px] text-slate-400">{num === 2 ? 'Khuyến nghị' : (num === 1 ? 'Nhanh nhất' : 'Số lượng lớn')}</div>
+                      <div className="text-xs sm:text-sm font-bold">{num} bài / Page</div>
+                      <div className="text-[10px] text-slate-400">
+                        {num === 2 ? 'Khuyến nghị' : (num === 5 ? 'Tiêu chuẩn' : (num === 10 ? 'Nhiều' : (num === 20 ? 'Rất lớn' : 'Tối đa')))}
+                      </div>
                     </button>
                   ))}
                 </div>
+
+                {/** Ô nhập tùy chỉnh số bài */}
+                <div className="flex items-center gap-3 pt-1">
+                  <label className="text-xs font-semibold text-slate-300 shrink-0">
+                    Hoặc nhập số bài tùy ý:
+                  </label>
+                  <div className="relative flex-1 max-w-[160px]">
+                    <input
+                      type="number"
+                      min={1}
+                      max={100}
+                      value={bulkSyncBatchSize}
+                      onChange={(e) => {
+                        const val = parseInt(e.target.value, 10);
+                        if (!isNaN(val)) {
+                          setBulkSyncBatchSize(Math.max(1, Math.min(100, val)));
+                        } else {
+                          setBulkSyncBatchSize(1);
+                        }
+                      }}
+                      className="w-full bg-slate-900/80 border border-slate-700/80 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500 font-bold"
+                      placeholder="1 - 100"
+                    />
+                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-slate-400 font-medium pointer-events-none">
+                      bài/page
+                    </span>
+                  </div>
+                  <span className="text-[11px] text-slate-400">(Tối đa 100 bài/page)</span>
+                </div>
+
                 <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-xs text-emerald-300 flex items-start gap-2">
                   <span className="material-symbols-outlined text-base text-emerald-400 shrink-0 mt-0.5">verified</span>
                   <div>
@@ -2540,11 +2578,12 @@ export default function FacebookPages() {
                 targetPages = pages.filter(p => selectedPageIds.includes(p.id));
               }
               const readyPages = targetPages.filter(p => (p.sourcesCount && p.sourcesCount > 0) || (p.sources && p.sources.length > 0));
+              const totalEstimatedPosts = readyPages.length * bulkSyncBatchSize;
 
               return (
-                <div className="pt-3 border-t border-fb-surface-hover/50 flex items-center justify-between gap-2.5">
+                <div className="pt-3 border-t border-fb-surface-hover/50 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
                   <div className="text-xs text-slate-400">
-                    Sẵn sàng: <b className="text-emerald-400 font-bold">{readyPages.length}</b>/{targetPages.length} Fanpage
+                    Sẵn sàng: <b className="text-emerald-400 font-bold">{readyPages.length}</b>/{targetPages.length} Fanpage &bull; Tổng cào: <b className="text-teal-400 font-bold">{totalEstimatedPosts}</b> bài viết
                   </div>
                   <div className="flex items-center gap-2.5">
                     <button
@@ -2567,7 +2606,7 @@ export default function FacebookPages() {
                       <span>
                         {isSubmittingBulkSync
                           ? 'Đang đồng bộ...'
-                          : `Đồng Bộ Ngay (${readyPages.length} Page)`}
+                          : `Đồng Bộ Ngay (${totalEstimatedPosts} Bài / ${readyPages.length} Page)`}
                       </span>
                     </button>
                   </div>

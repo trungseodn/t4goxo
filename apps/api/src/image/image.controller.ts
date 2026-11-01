@@ -17,6 +17,7 @@ import { ZTTeamAIService } from '../ai/ai.service';
 import { ZTTeamStoryTestService } from '../story-test/story-test.service';
 import { ZTTeamHookVideoService } from '../media/hook-video.service';
 import { ztteam_getNewsComment } from '../common/ztteam_news_comment.util';
+import { ztteam_extractErrorMessage, ztteam_translateErrorVi } from '../telegram/telegram.service';
 
 @Controller('image')
 export class ZTTeamImageController {
@@ -655,9 +656,9 @@ export class ZTTeamImageController {
       where: { id },
       include: { page: true }
     });
-    if (!image) throw new Error('Image not found');
+    if (!image) throw new BadRequestException('Không tìm thấy bài viết');
 
-    if (!image.image_url) throw new Error('Image output not available');
+    if (!image.image_url) throw new BadRequestException('Bài viết chưa có ảnh hoàn chỉnh');
 
     let absoluteImagePath = ztteam_getImagesPath(image.id, 'output.png');
 
@@ -676,7 +677,7 @@ export class ZTTeamImageController {
     }
 
     if (!fs.existsSync(absoluteImagePath)) {
-      throw new Error('Image file not found on disk');
+      throw new BadRequestException('Tập tin ảnh không tồn tại trên máy chủ');
     }
 
     if (!image.page || !image.page.fb_page_id || !image.page_id) {
@@ -738,6 +739,7 @@ export class ZTTeamImageController {
     let fbPostId: string;
     const pageFormat = image.page?.post_format || 'reel';
 
+    try {
     /** ZTTeam: Tuân thủ tuyệt đối cấu hình Kiểu bài đăng chính trên Fanpage (post_format) */
     if (pageFormat === 'reel') {
       /** Cấu hình: Nếu chọn reel thì đăng reel, nếu bài chuẩn bị đăng ko có reel thì đăng ảnh (đảm bảo phải có bài để đăng) */
@@ -810,6 +812,20 @@ export class ZTTeamImageController {
           description
         );
       }
+    }
+    } catch (fbErr: any) {
+      const extracted = ztteam_extractErrorMessage(fbErr);
+      const friendlyVi = ztteam_translateErrorVi(extracted);
+      this.logger.error(`Manual publish error for image ${id}: ${extracted}`);
+
+      await this.prisma.ztteam_images.update({
+        where: { id },
+        data: {
+          error_log: `${friendlyVi} (${extracted})`,
+        }
+      }).catch(() => {});
+
+      throw new BadRequestException(`${friendlyVi} (${extracted})`);
     }
 
     /** ZTTeam: Ngay khi dang thanh cong, gan link vao comment luon theo chuan tin tuc */

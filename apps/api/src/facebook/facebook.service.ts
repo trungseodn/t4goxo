@@ -1184,7 +1184,10 @@ export class ZTTeamFacebookService {
       return { success: true, postId: response.data.id };
     } catch (error: any) {
       this.logger.error('Error posting to Facebook', error.response?.data || error);
-      throw new Error(error.response?.data?.error?.message || 'Lỗi kết nối đến Facebook API');
+      const { ztteam_extractErrorMessage, ztteam_translateErrorVi } = require('../telegram/telegram.service');
+      const extracted = ztteam_extractErrorMessage(error);
+      const friendlyVi = ztteam_translateErrorVi(extracted);
+      throw new BadRequestException(`${friendlyVi} (${extracted})`);
     }
   }
 
@@ -3116,6 +3119,8 @@ export class ZTTeamFacebookService {
 
     let commentSuccess = false;
     let captionSuccess = false;
+    let lastError: any = null;
+    let isRateLimit = false;
 
     // 1. Chèn vào Comment
     if (placement === 'comment' || placement === 'both') {
@@ -3128,7 +3133,14 @@ export class ZTTeamFacebookService {
           this.logger.log(`[Link Injection] Đã gắn link vào comment bài ${postId} trên Page "${page.name}"`);
         }
       } catch (cmtErr: any) {
-        this.logger.error(`[Link Injection] Lỗi gắn comment cho bài ${postId}: ${cmtErr.message}`);
+        lastError = cmtErr;
+        const errMsg = cmtErr.response?.data?.error?.message || cmtErr.message || '';
+        const errCode = cmtErr.response?.data?.error?.code;
+        const errSub = cmtErr.response?.data?.error?.error_subcode;
+        if (errCode === 368 || errSub === 1390008 || errSub === 4854002 || errMsg.includes('limit') || errMsg.includes('spam')) {
+          isRateLimit = true;
+        }
+        this.logger.error(`[Link Injection] Lỗi gắn comment cho bài ${postId}: ${errMsg}`);
       }
     }
 
@@ -3159,6 +3171,8 @@ export class ZTTeamFacebookService {
       commentSuccess,
       captionSuccess,
       placement,
+      lastError,
+      isRateLimit,
     };
   }
 

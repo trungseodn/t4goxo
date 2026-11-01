@@ -48,8 +48,12 @@ export class ZTTeamLinkViewTrackerCron {
       }
 
       const fortyEightHoursAgo = new Date(Date.now() - 48 * 60 * 60 * 1000);
+      let injectionsInThisTick = 0;
+      const MAX_INJECTIONS_PER_TICK = 3;
+      let circuitBreakerTriggered = false;
 
       for (let i = 0; i < pages.length; i++) {
+        if (circuitBreakerTriggered) break;
         const page = pages[i];
         if (!page.page_token_encrypted || !page.fb_page_id) {
           continue;
@@ -138,6 +142,19 @@ export class ZTTeamLinkViewTrackerCron {
           const isFallbackReached = fallbackHours > 0 && hoursSincePosted >= fallbackHours;
 
           if (isViewReached || isFallbackReached) {
+            if (hoursSincePosted > 24) {
+              await this.prisma.ztteam_reels.update({
+                where: { id: reel.id },
+                data: { link_injected: true, link_injected_at: new Date(), link_injected_type: 'skipped_expired' }
+              });
+              continue;
+            }
+
+            if (injectionsInThisTick >= MAX_INJECTIONS_PER_TICK) {
+              this.logger.log(`[LinkTracker] Đã đạt giới hạn ${MAX_INJECTIONS_PER_TICK} bài gắn link trong nhịp này. Hoãn các bài còn lại sang nhịp sau để bảo vệ Meta Rate Limit.`);
+              break;
+            }
+
             this.logger.log(
               `[LinkTracker] 🎯 KÍCH HOẠT GẮN LINK cho Reel "${reel.wp_post_title}" (ID: ${postId}) trên Page "${page.name}": Views = ${views}/${threshold}, Giờ đăng = ${hoursSincePosted.toFixed(1)}h (Fallback: ${isFallbackReached})`
             );
@@ -152,16 +169,26 @@ export class ZTTeamLinkViewTrackerCron {
               utmSource: 'reel_viral',
             });
 
+            injectionsInThisTick++;
+
             await this.prisma.ztteam_reels.update({
               where: { id: reel.id },
               data: {
                 link_injected: result.success,
                 link_injected_at: result.success ? new Date() : null,
-                link_injected_type: targetPlacement,
+                link_injected_type: result.success ? targetPlacement : null,
                 current_views: views,
                 last_view_checked_at: new Date(),
               },
             });
+
+            if ((result as any).isRateLimit) {
+              circuitBreakerTriggered = true;
+              this.logger.warn('[LinkTracker] Facebook kích hoạt giới hạn tần suất (Code 368 / 1390008). Tạm ngưng chu kỳ gắn link để tài khoản hồi phục.');
+              break;
+            }
+
+            await new Promise(r => setTimeout(r, 3000));
           } else if (reel.current_views !== views) {
             /** Cập nhật lượt xem gần nhất khi có thay đổi */
             await this.prisma.ztteam_reels.update({
@@ -191,6 +218,19 @@ export class ZTTeamLinkViewTrackerCron {
           const isFallbackReached = fallbackHours > 0 && hoursSincePosted >= fallbackHours;
 
           if (isViewReached || isFallbackReached) {
+            if (hoursSincePosted > 24) {
+              await this.prisma.ztteam_images.update({
+                where: { id: img.id },
+                data: { link_injected: true, link_injected_at: new Date(), link_injected_type: 'skipped_expired' }
+              });
+              continue;
+            }
+
+            if (injectionsInThisTick >= MAX_INJECTIONS_PER_TICK) {
+              this.logger.log(`[LinkTracker] Đã đạt giới hạn ${MAX_INJECTIONS_PER_TICK} bài gắn link trong nhịp này. Hoãn các bài còn lại sang nhịp sau để bảo vệ Meta Rate Limit.`);
+              break;
+            }
+
             this.logger.log(
               `[LinkTracker] 🎯 KÍCH HOẠT GẮN LINK cho Ảnh "${img.wp_post_title}" (ID: ${postId}) trên Page "${page.name}": Views = ${views}/${threshold}, Giờ đăng = ${hoursSincePosted.toFixed(1)}h (Fallback: ${isFallbackReached})`
             );
@@ -205,16 +245,26 @@ export class ZTTeamLinkViewTrackerCron {
               utmSource: 'image_viral',
             });
 
+            injectionsInThisTick++;
+
             await this.prisma.ztteam_images.update({
               where: { id: img.id },
               data: {
                 link_injected: result.success,
                 link_injected_at: result.success ? new Date() : null,
-                link_injected_type: targetPlacement,
+                link_injected_type: result.success ? targetPlacement : null,
                 current_views: views,
                 last_view_checked_at: new Date(),
               },
             });
+
+            if ((result as any).isRateLimit) {
+              circuitBreakerTriggered = true;
+              this.logger.warn('[LinkTracker] Facebook kích hoạt giới hạn tần suất (Code 368 / 1390008). Tạm ngưng chu kỳ gắn link để tài khoản hồi phục.');
+              break;
+            }
+
+            await new Promise(r => setTimeout(r, 3000));
           } else if (img.current_views !== views) {
             await this.prisma.ztteam_images.update({
               where: { id: img.id },

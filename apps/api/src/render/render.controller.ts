@@ -574,7 +574,10 @@ export class ZTTeamRenderController {
 
       return { message: 'Đã đăng thành công', facebookResponse: response };
     } catch (e: any) {
-      return { error: e.message };
+      const { ztteam_extractErrorMessage, ztteam_translateErrorVi } = require('../telegram/telegram.service');
+      const extracted = ztteam_extractErrorMessage(e);
+      const friendlyVi = ztteam_translateErrorVi(extracted);
+      return { error: `${friendlyVi} (${extracted})`, code: 'FB_PUBLISH_FAILED' };
     }
   }
 

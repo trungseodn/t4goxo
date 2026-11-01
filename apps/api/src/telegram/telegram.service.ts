@@ -168,11 +168,14 @@ export function ztteam_translateErrorVi(errorMsg: string): string {
   }
   if (
     msg.includes('368') ||
+    msg.includes('1390008') ||
     msg.includes('going too fast') ||
     msg.includes('action blocked') ||
-    msg.includes('misusing this feature')
+    msg.includes('misusing this feature') ||
+    msg.includes('we limit how often') ||
+    msg.includes('protect the community from spam')
   ) {
-    return 'Facebook tạm thời chặn tính năng do thao tác quá nhanh hoặc nghi ngờ spam (Facebook Block Code 368). Hệ thống tạm ngưng tương tác trên Page.';
+    return 'Facebook tạm khóa/giới hạn tính năng do tần suất đăng bài hoặc bình luận quá nhiều (Meta Spam Protection - Code 368 / Subcode 1390008). Vui lòng tạm hoãn để tài khoản/Page hồi phục.';
   }
   if (
     msg.includes('request limit reached') ||

@@ -346,21 +346,6 @@ export default function SystemSettingsPage() {
                   </div>
                 </div>
 
-                {/** Card SangTao.ai */}
-                <div className="p-2.5 rounded-xl bg-black/20 border border-white/5 flex items-center justify-between text-xs">
-                  <div className="flex items-center gap-2">
-                    <span className="material-symbols-outlined text-base text-emerald-400">palette</span>
-                    <div>
-                      <span className="font-bold text-fb-text block">SangTao.ai (Ảnh 2K)</span>
-                      <span className="text-[10px] text-fb-text-muted">{aiHealth.sangtao?.message}</span>
-                    </div>
-                  </div>
-                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-black shrink-0 ${
-                    aiHealth.sangtao?.status === 'HEALTHY' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-amber-500/15 text-amber-400'
-                  }`}>
-                    {aiHealth.sangtao?.status === 'HEALTHY' ? 'CÒN CREDIT' : 'DÙNG ẢNH GỐC'}
-                  </span>
-                </div>
               </div>
             )}
 

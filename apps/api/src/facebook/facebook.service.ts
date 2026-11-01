@@ -2409,49 +2409,14 @@ export class ZTTeamFacebookService {
   }
 
   /**
-   * ZTTeam: Danh sách Key SangTao.ai dành riêng cho chức năng tạo Avatar & Ảnh bìa Page (cô lập tuyệt đối với ảnh bài viết)
-   * Tự động luân chuyển sang Key kế tiếp khi Key hiện tại hết credit hoặc gặp sự cố
-   */
-  private readonly ZTTEAM_BRANDING_SANGTAO_KEYS = [
-    'stai_751dcc6175575dd8cf1f5fc522b62cc2da73e8404f3f527e', /** Key 1: 24 credit */
-    'stai_bf5e874c373092f9429faba2f1d5da159fb9d89929620c70', /** Key 2: 100 credit */
-  ];
-
-  /**
-   * ZTTeam: Tạo ảnh bằng SangTao.ai (Pool Key Branding riêng), tự động chuyển key khi hết credit
+   * ZTTeam: Tạo ảnh Branding Fanpage (SangTao.ai đã được gỡ bỏ)
    */
   async ztteam_renderImageSmartFallback(prompt: string, aspectRatio: '1:1' | '16:9'): Promise<{
     imageUrl: string;
     localPath: string;
-    engine: 'sangtao';
+    engine: 'source_original';
   }> {
-    let lastError: any = null;
-
-    for (let i = 0; i < this.ZTTEAM_BRANDING_SANGTAO_KEYS.length; i++) {
-      const currentKey = this.ZTTEAM_BRANDING_SANGTAO_KEYS[i];
-      const maskedKey = `${currentKey.substring(0, 8)}...${currentKey.substring(currentKey.length - 4)}`;
-      this.logger.log(`[Branding] Đang tạo ảnh (${aspectRatio}) bằng SangTao.ai với Key #${i + 1} (${maskedKey})...`);
-
-      try {
-        const result = await this.storyTestService.ztteam_renderStoryImage({
-          prompt,
-          aspectRatio,
-          apiKey: currentKey,
-        });
-
-        return {
-          imageUrl: result.imageUrl,
-          localPath: result.localPath,
-          engine: 'sangtao',
-        };
-      } catch (err: any) {
-        lastError = err;
-        const errMsg = err?.message || String(err);
-        this.logger.warn(`[Branding] Key #${i + 1} (${maskedKey}) gặp lỗi: ${errMsg}. Đang kiểm tra chuyển sang key tiếp theo...`);
-      }
-    }
-
-    throw new BadRequestException(`Tất cả các Key SangTao.ai Branding đều không thể tạo ảnh: ${lastError?.message || 'Lỗi không xác định'}`);
+    throw new BadRequestException('Tính năng tạo ảnh Branding bằng SangTao.ai đã được gỡ bỏ khỏi hệ thống.');
   }
 
   /**
@@ -2794,8 +2759,7 @@ export class ZTTeamFacebookService {
         });
 
         /** Nếu tất cả key đều hết credit hoặc lỗi toàn bộ, dừng lại an toàn */
-        if (errMsg.includes('Tất cả các Key SangTao.ai') || errMsg.includes('credit')) {
-          this.logger.warn('[Branding Batch] Đã hết toàn bộ credit trên tất cả các Key SangTao.ai. Dừng tiến trình an toàn.');
+        if (errMsg.includes('gỡ bỏ') || errMsg.includes('credit')) {
           break;
         }
       }

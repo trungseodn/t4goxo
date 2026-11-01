@@ -50,8 +50,7 @@ export class ZTTeamSettingsService {
     const result: any = {
       activeProvider: settings['active_ai_provider'] || 'gemini',
       gemini: { status: 'NOT_CONFIGURED', latencyMs: 0, model: 'gemini-3.5-flash-lite', quotaTier: 'Free Tier (500 req/ngày)', message: 'Chưa cấu hình API Key' },
-      openai: { status: 'NOT_CONFIGURED', latencyMs: 0, model: 'gpt-4o-mini', message: 'Chưa cấu hình API Key' },
-      sangtao: { status: 'NOT_CONFIGURED', availableCredits: 0, message: 'Chưa cấu hình API Key' }
+      openai: { status: 'NOT_CONFIGURED', latencyMs: 0, model: 'gpt-4o-mini', message: 'Chưa cấu hình API Key' }
     };
 
     /** 1. Kiểm tra Google Gemini */
@@ -109,42 +108,6 @@ export class ZTTeamSettingsService {
           latencyMs: 0,
           model: 'gpt-4o-mini',
           message: err.message || 'Lỗi kết nối OpenAI'
-        };
-      }
-    }
-
-    /** 3. Kiểm tra SangTao.ai */
-    const sangtaoKey = settings['siliconflow_api_key'] || process.env.SANGTAO_API_KEY;
-    const cleanKey = (sangtaoKey || '').replace(/^["']|["']$/g, '').trim();
-    if (cleanKey) {
-      try {
-        const res = await fetch('https://sangtao.ai/api/v2/agents/jobs/create', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Api-Key': cleanKey,
-          },
-          body: JSON.stringify({ ping: true }),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (data.error && data.error.includes('Insufficient credits')) {
-          result.sangtao = {
-            status: 'OUT_OF_CREDITS',
-            availableCredits: 0,
-            message: 'Hết credit (Available: 0). Đang tự động kích hoạt lấy ảnh gốc bài viết làm ảnh đại diện.'
-          };
-        } else {
-          result.sangtao = {
-            status: 'HEALTHY',
-            availableCredits: data.availableCredits || 'OK',
-            message: 'Sẵn sàng tạo ảnh 2K'
-          };
-        }
-      } catch (err: any) {
-        result.sangtao = {
-          status: 'ERROR',
-          availableCredits: 0,
-          message: err.message
         };
       }
     }

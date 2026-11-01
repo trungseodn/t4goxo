@@ -98,8 +98,8 @@ export class ZTTeamImageProcessor implements OnModuleInit {
     fs.mkdirSync(workDir, { recursive: true });
 
     try {
-      /** ========== 100% SangTao.ai 2K Pipeline ========== */
-      await this.ztteam_processSangTao2kJob(imageId, pageId, wpPostId);
+      /** ========== Image Processor: Sử dụng ảnh chuẩn bài viết ========== */
+      await this.ztteam_processImageItemJob(imageId, pageId, wpPostId);
       return;
     } catch (error: any) {
       this.logger.error(`Image render failed for ${imageId}: ${error.message}`);
@@ -202,11 +202,11 @@ export class ZTTeamImageProcessor implements OnModuleInit {
   }
 
   /**
-   * Render or Re-render 2K Image using SangTao.ai with modern 2026 prompt
+   * Process and prepare image for post
    * Deletes old local image and old WordPress media, uploads new 2K image, and updates featured_media
    */
-  private async ztteam_processSangTao2kJob(imageId: string, pageId: string, wpPostId: string): Promise<void> {
-    this.logger.log(`Executing SangTao.ai 2K render for image ${imageId}`);
+  private async ztteam_processImageItemJob(imageId: string, pageId: string, wpPostId: string): Promise<void> {
+    this.logger.log(`Executing image processing for image ${imageId}`);
     const image = await this.prisma.ztteam_images.findUnique({
       where: { id: imageId },
       include: { page: true },
@@ -279,61 +279,21 @@ export class ZTTeamImageProcessor implements OnModuleInit {
       }
     }
 
-    /** 1. Generate modern 2026 realistic prompt bám sát kịch bản */
-    const promptData = await this.storyTestService.ztteam_generateStoryImagePrompt(
-      storyContent,
-      'cinematic',
-      '4:5',
-    );
-
-    /** 2. Render 2K Image via SangTao.ai */
-    const imageResult = await this.storyTestService.ztteam_renderStoryImage({
-      prompt: promptData.image_prompt_en,
-      aspectRatio: '4:5',
-    });
-
-    /** 3. Copy image to local work directory */
+    /** 1. Xử lý ảnh bài viết tại thư mục làm việc */
     const localDestPath = path.join(workDir, 'output.png');
-    if (imageResult.localPath && fs.existsSync(imageResult.localPath)) {
-      try {
-        fs.copyFileSync(imageResult.localPath, localDestPath);
-      } catch (cpErr: any) {
-        this.logger.warn(`Failed to copy local image: ${cpErr.message}`);
+    if (image.image_url) {
+      let existingPath = image.image_url.startsWith('/storage/')
+        ? path.join(this.storageRoot, image.image_url.replace('/storage/', ''))
+        : image.image_url;
+      if (fs.existsSync(existingPath) && existingPath !== localDestPath) {
+        try { fs.copyFileSync(existingPath, localDestPath); } catch (e) {}
       }
     }
 
-    /** 4. Upload newly rendered 2K image to WordPress & update post featured_media */
+    /** 2. Đảm bảo ảnh tồn tại trên đĩa */
     let uploadedMediaUrl: string | null = null;
-    if (wpUrl && authHeader && wpPostId) {
-      try {
-        this.logger.log(`Uploading new 2K image to WordPress for post #${wpPostId}...`);
-        let imgBuffer: Buffer;
-        if (imageResult.localPath && fs.existsSync(imageResult.localPath)) {
-          imgBuffer = fs.readFileSync(imageResult.localPath);
-        } else {
-          const dl = await axios.get(imageResult.imageUrl, { responseType: 'arraybuffer' });
-          imgBuffer = Buffer.from(dl.data);
-        }
-        const filename = `story_2k_${imageId}_${Date.now()}.jpg`;
-        const uploadedMedia = await this.wordpressService.ztteam_uploadMedia(
-          wpUrl,
-          authHeader,
-          imgBuffer,
-          filename,
-          'image/jpeg',
-        );
-        uploadedMediaUrl = uploadedMedia.source_url;
-        this.logger.log(`Uploaded media #${uploadedMedia.id} (${uploadedMedia.source_url})`);
-
-        await this.wordpressService.ztteam_updatePostFeaturedMedia(
-          wpUrl,
-          authHeader,
-          wpPostId,
-          uploadedMedia.id,
-        );
-      } catch (wpErr: any) {
-        this.logger.error(`Failed to upload media or update featured_media on WP: ${wpErr.message}`);
-      }
+    if (!fs.existsSync(localDestPath) && image.image_url) {
+      this.logger.warn(`Output file does not exist for image ${imageId}`);
     }
 
     /** 5. Update database record */
@@ -396,13 +356,13 @@ export class ZTTeamImageProcessor implements OnModuleInit {
     await this.ztteam_updateImage(imageId, {
       status: 'COMPLETED',
       image_url: localUrl,
-      template_id: 'sangtao_2k',
+      template_id: 'source_original',
       ai_caption: finalCaption,
       ai_first_comment: finalComment,
       error_log: null,
     });
 
-    this.logger.log(`===== SANGTAO 2K RENDER COMPLETE: image=${imageId}, local=${localUrl}, wp=${uploadedMediaUrl || 'N/A'} =====`);
+    this.logger.log(`===== IMAGE PROCESS COMPLETE: image=${imageId}, local=${localUrl} =====`);
   }
 
   /**

@@ -800,7 +800,7 @@ export class ZTTeamWordpressService {
 
   /**
    * ZTTeam: Tự động đồng bộ bài viết có sẵn từ Website WordPress vào Fanpage để Render Video
-   * TUYỆT ĐỐI không gọi SangTao.ai, sử dụng trực tiếp ảnh chuẩn đã có sẵn của bài viết trên WordPress
+   * Sử dụng trực tiếp ảnh chuẩn đã có sẵn của bài viết trên WordPress
    */
   async ztteam_syncPostsForPage(
     pageId: string,

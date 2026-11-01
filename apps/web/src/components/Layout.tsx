@@ -8,15 +8,6 @@ import { ztteam_decodeHtmlEntity } from '../utils/stringUtils';
 import api from '../services/api';
 import ZTTeamRealtimeWidget from './RealtimeWidget';
 
-interface ZTTeamSangTaoQuotaData {
-    email?: string;
-    quotaRemaining: number;
-    chargeSource?: string;
-    concurrency?: number;
-    capReason?: string;
-    updatedAt?: string;
-}
-
 /** Helper to check if a nav item is active */
 function ztteam_isActive(pathname: string, path: string): boolean {
     if (path === '/') return pathname === '/';
@@ -33,29 +24,10 @@ export default function Layout() {
     const location = useLocation();
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
     const [isFbSubmenuOpen, setIsFbSubmenuOpen] = useState(true);
-    const [sangtaoQuota, setSangtaoQuota] = useState<ZTTeamSangTaoQuotaData | null>(null);
-    const [showSangtaoMenu, setShowSangtaoMenu] = useState(false);
-    const [isRefreshingQuota, setIsRefreshingQuota] = useState(false);
 
-    /** Lấy thông tin tài khoản và hạn mức SangTao.ai */
-    const ztteam_fetchSangTaoQuota = async () => {
-        setIsRefreshingQuota(true);
-        try {
-            const res = await api.get('/story-test/sangtao-quota');
-            if (res.data?.success && res.data?.data) {
-                setSangtaoQuota(res.data.data);
-            }
-        } catch (e) {
-            /** Bỏ qua lỗi mạng */
-        } finally {
-            setIsRefreshingQuota(false);
-        }
-    };
-
-    /** Fetch Facebook pages và SangTao quota on mount */
+    /** Fetch Facebook pages on mount */
     useEffect(() => {
         ztteam_fetchPagesFromDB();
-        ztteam_fetchSangTaoQuota();
     }, []);
 
     /** Auto-close mobile sidebar when route changes */
@@ -236,102 +208,6 @@ export default function Layout() {
                 <div className="flex items-center gap-2">
                     {/** Google Analytics 4 Realtime Online Badge */}
                     <ZTTeamRealtimeWidget />
-
-                    {/** SangTao.ai Quota Compact Badge */}
-                    <div className="relative">
-                        <button
-                            onClick={() => setShowSangtaoMenu(!showSangtaoMenu)}
-                            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full bg-fb-surface-hover hover:bg-slate-800 text-fb-text border border-slate-700/60 transition-all text-xs font-semibold shadow-sm cursor-pointer select-none"
-                            title="Hạn mức tài khoản SangTao.ai"
-                        >
-                            <span className="material-symbols-outlined text-sm text-cyan-400">magic_button</span>
-                            <span className="hidden sm:inline text-fb-text-muted font-mono">SangTao:</span>
-                            <span className="text-emerald-400 font-bold font-mono">
-                                {sangtaoQuota ? sangtaoQuota.quotaRemaining : '...'}
-                            </span>
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                        </button>
-
-                        {/** Dropdown Popover */}
-                        {showSangtaoMenu && (
-                            <>
-                                <div
-                                    className="fixed inset-0 z-40"
-                                    onClick={() => setShowSangtaoMenu(false)}
-                                />
-                                <div className="absolute right-0 mt-2 w-72 rounded-2xl bg-fb-surface border border-slate-700/80 shadow-2xl p-4 z-50 text-xs text-fb-text animate-in fade-in zoom-in-95 duration-150">
-                                    <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-                                        <div className="flex items-center gap-2">
-                                            <div className="w-7 h-7 rounded-lg bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400">
-                                                <span className="material-symbols-outlined text-base">magic_button</span>
-                                            </div>
-                                            <div>
-                                                <div className="font-bold text-fb-text text-sm leading-tight">SangTao.ai</div>
-                                                <div className="text-[10px] text-emerald-400 font-medium">Hoạt động bình thường</div>
-                                            </div>
-                                        </div>
-                                        <button
-                                            onClick={(e) => {
-                                                e.stopPropagation();
-                                                ztteam_fetchSangTaoQuota();
-                                            }}
-                                            disabled={isRefreshingQuota}
-                                            title="Làm mới thông tin"
-                                            className="p-1 text-fb-text-muted hover:text-cyan-400 hover:bg-fb-surface-hover rounded-lg transition-colors cursor-pointer"
-                                        >
-                                            <span className={`material-symbols-outlined text-sm ${isRefreshingQuota ? 'animate-spin text-cyan-400' : ''}`}>
-                                                sync
-                                            </span>
-                                        </button>
-                                    </div>
-
-                                    <div className="mt-3 space-y-2.5">
-                                        <div className="p-2.5 rounded-xl bg-slate-900/60 border border-slate-800 flex items-center justify-between">
-                                            <span className="text-fb-text-muted font-medium">Hạn mức còn lại:</span>
-                                            <span className="text-lg font-black font-mono text-emerald-400">
-                                                {sangtaoQuota?.quotaRemaining ?? 0} <span className="text-xs font-normal text-slate-400">lượt</span>
-                                            </span>
-                                        </div>
-
-                                        <div className="space-y-1.5 px-0.5 text-[11px]">
-                                            <div className="flex justify-between items-center text-slate-400">
-                                                <span>Tài khoản:</span>
-                                                <span className="font-mono text-fb-text truncate max-w-[150px]" title={sangtaoQuota?.email || 'dev.zota@gmail.com'}>
-                                                    {sangtaoQuota?.email || 'dev.zota@gmail.com'}
-                                                </span>
-                                            </div>
-                                            <div className="flex justify-between items-center text-slate-400">
-                                                <span>Gói cước:</span>
-                                                <span className="text-cyan-400 font-semibold">{sangtaoQuota?.capReason || 'Gói thuê bao'}</span>
-                                            </div>
-                                            <div className="flex justify-between items-center text-slate-400">
-                                                <span>Song song:</span>
-                                                <span className="text-fb-text font-mono">{sangtaoQuota?.concurrency || 5} luồng</span>
-                                            </div>
-                                            {sangtaoQuota?.updatedAt && (
-                                                <div className="flex justify-between items-center text-slate-500 text-[10px] pt-1 border-t border-slate-800/60">
-                                                    <span>Cập nhật:</span>
-                                                    <span>{new Date(sangtaoQuota.updatedAt).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
-                                                </div>
-                                            )}
-                                        </div>
-                                    </div>
-
-                                    <div className="mt-3 pt-2 border-t border-slate-800">
-                                        <a
-                                            href="https://sangtao.ai/agents"
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            className="flex items-center justify-center gap-1.5 w-full py-1.5 px-3 rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 text-[11px] font-semibold border border-cyan-500/30 transition-all cursor-pointer"
-                                        >
-                                            <span>Mở trang SangTao.ai</span>
-                                            <span className="material-symbols-outlined text-xs">open_in_new</span>
-                                        </a>
-                                    </div>
-                                </div>
-                            </>
-                        )}
-                    </div>
 
                     <div className="h-6 w-px bg-fb-surface-hover mx-1"></div>
 

@@ -353,7 +353,7 @@ export class ZTTeamCrawlerCron implements OnApplicationBootstrap {
           continue;
         }
 
-        /** Call full automated pipeline: Crawl clean story -> SangTao.ai 2K Image -> WordPress + 2K Featured Image -> Queue Fanpage (luân phiên Least-Loaded) */
+        /** Call full automated pipeline: Crawl clean story -> Source Image -> WordPress + 2K Featured Image -> Queue Fanpage (luân phiên Least-Loaded) */
         let keepContentImages = true;
         try {
           const rules = JSON.parse(source.extract_rules_json || '{}');
@@ -429,8 +429,8 @@ export class ZTTeamCrawlerCron implements OnApplicationBootstrap {
         const em = extractedError.toLowerCase();
         if (em.includes('không thể lấy nội dung') || em.includes('fetch') || em.includes('không phải bài viết')) {
           failStep = 'Bước 1/4: Thu thập và kiểm duyệt nội dung bài viết từ website nguồn';
-        } else if (em.includes('sangtao') || em.includes('ảnh gốc') || em.includes('credit')) {
-          failStep = 'Bước 2/4: Tải ảnh gốc dự phòng hoặc tạo ảnh AI 2K';
+        } else if (em.includes('ảnh gốc') || em.includes('tải ảnh') || em.includes('image')) {
+          failStep = 'Bước 2/4: Tải và xử lý ảnh bài viết';
         } else if (em.includes('wordpress') || em.includes('featured media') || em.includes('tải ảnh lên wp')) {
           failStep = 'Bước 3/4: Đăng bài viết & Featured Media lên Website WordPress đích';
         } else if (em.includes('fanpage') || em.includes('facebook')) {

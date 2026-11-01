@@ -940,7 +940,7 @@ export class ZTTeamImageController {
 
   /**
    * ZTTeam: Thử lại bài viết ảnh
-   * - Nếu đã có file ảnh (image_url) và không có cờ force: Chỉ làm mới khung giờ xuất bản (status = COMPLETED), giữ nguyên ảnh, không gọi SangTao.ai vẽ lại.
+   * - Nếu đã có file ảnh (image_url) và không có cờ force: Chỉ làm mới khung giờ xuất bản (status = COMPLETED), giữ nguyên ảnh.
    * - Nếu chưa có file ảnh hoặc truyền ?force=true: Vẽ lại ảnh mới bằng AI.
    */
   @Post('retry/:id')

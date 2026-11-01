@@ -128,7 +128,7 @@ export function ztteam_extractErrorMessage(error: any): string {
     return `${code}${error.response.data.message}`;
   }
 
-  /** 3. Bóc tách lỗi từ OpenAI / SangTao AI */
+  /** 3. Bóc tách lỗi từ OpenAI */
   if (error.response?.data?.error?.message) {
     return error.response.data.error.message;
   }
@@ -221,9 +221,9 @@ export function ztteam_translateErrorVi(errorMsg: string): string {
     return 'Tham số gửi lên Facebook không hợp lệ (URL ảnh/video hoặc nội dung không đúng định dạng của Facebook).';
   }
 
-  /** 2. Lỗi tài khoản AI SangTao / OpenAI */
+  /** 2. Lỗi tài khoản AI / OpenAI */
   if (msg.includes('insufficient credits') || msg.includes('402') || msg.includes('balance')) {
-    return 'Tài khoản SangTao.ai đã hết credit tạo ảnh (cần 4 credit để tạo ảnh 2K). Hệ thống sẽ chuyển sang dùng ảnh gốc dự phòng.';
+    return 'Tài khoản AI đã hết hạn mức / credit. Vui lòng kiểm tra lại tài khoản API.';
   }
   if (msg.includes('rate limit') || msg.includes('429') || msg.includes('quota')) {
     return 'Vượt quá giới hạn tần suất gọi API AI (Rate Limit 429). Hệ thống sẽ tự động thử lại sau ít phút.';

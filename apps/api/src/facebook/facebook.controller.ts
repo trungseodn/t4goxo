@@ -153,6 +153,16 @@ export class ZTTeamFacebookController {
     return this.facebookService.ztteam_getBrandingQueueStatus();
   }
 
+  @Post('pages/branding/heartbeat')
+  ztteam_brandingWorkerHeartbeat(@Body() body: any) {
+    return this.facebookService.ztteam_recordBrandingWorkerHeartbeat(body?.workerName);
+  }
+
+  @Post('pages/branding/queue-reset')
+  ztteam_resetAllBrandingJobs(@Body() body: { resetAll?: boolean }) {
+    return this.facebookService.ztteam_resetAllPendingAndProcessingBrandingJobs(body);
+  }
+
   @Post('pages/branding/:pageId/reset')
   ztteam_resetBrandingJob(@Param('pageId') pageId: string) {
     return this.facebookService.ztteam_resetBrandingJob(pageId);

@@ -6,9 +6,9 @@ cd /d "%~dp0"
 
 echo ========================================================
 echo   ZTTeam Muse Branding Worker - Avatar va Cover (Port 9245)
-echo   He thong VPS: http://169.58.190.115:3004
+echo   He thong: https://t4.goxo.us
 echo ========================================================
 echo.
 
-node scripts/ztteam_muse_branding_worker.js --target=http://169.58.190.115:3004 --chrome-port=9245 --worker-name=Branding-9245
+node scripts/ztteam_muse_branding_worker.js --target=https://t4.goxo.us --chrome-port=9245 --worker-name=Branding-9245
 pause

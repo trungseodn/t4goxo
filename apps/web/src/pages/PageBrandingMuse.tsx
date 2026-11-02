@@ -252,6 +252,34 @@ export default function PageBrandingMuse() {
     }
   };
 
+  /** Giải phóng các job bị kẹt (PROCESSING hoặc FAILED) quay về PENDING */
+  const handleResetStuckJobs = async () => {
+    try {
+      const res = await api.post('/facebook/pages/branding/queue-reset', { resetAll: false });
+      ztteam_showToast(res.data?.message || 'Đã giải phóng các job bị kẹt quay lại hàng đợi', 'success');
+      await refreshData();
+    } catch (err: any) {
+      ztteam_showToast(err.response?.data?.message || err.message, 'error');
+    }
+  };
+
+  /** Hủy bỏ toàn bộ hàng đợi Branding */
+  const handleClearAllQueue = async () => {
+    const confirm = await ztteam_showConfirm(
+      'Hủy toàn bộ hàng đợi',
+      'Bạn có chắc chắn muốn hủy và xóa toàn bộ Fanpage đang chờ vẽ khỏi hàng đợi?'
+    );
+    if (!confirm) return;
+
+    try {
+      const res = await api.post('/facebook/pages/branding/queue-reset', { resetAll: true });
+      ztteam_showToast(res.data?.message || 'Đã làm sạch toàn bộ hàng đợi', 'success');
+      await refreshData();
+    } catch (err: any) {
+      ztteam_showToast(err.response?.data?.message || err.message, 'error');
+    }
+  };
+
   /** Thống kê nhanh */
   const stats = useMemo(() => {
     const total = pages.filter(p => p.isActive !== false).length;
@@ -869,24 +897,63 @@ export default function PageBrandingMuse() {
           <div className="bg-fb-surface rounded-2xl shadow-lg border border-fb-surface-hover/50 p-4 sm:p-5 space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-fb-surface-hover/40">
               <div className="flex items-center gap-2.5">
-                <span className="p-2 rounded-xl bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                <span className={`p-2 rounded-xl border ${
+                  queueStatus?.worker?.online
+                    ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                    : 'bg-rose-500/15 text-rose-400 border-rose-500/30'
+                }`}>
                   <span className="material-symbols-outlined text-lg">smart_toy</span>
                 </span>
                 <div>
                   <h3 className="text-sm font-bold text-white">Trạng Thái Muse Worker (Chrome RPA)</h3>
                   <p className="text-[11px] text-slate-400 mt-0.5">
-                    Worker chạy trên máy tính kết nối cổng Chrome Remote Debugging 9245 (hoặc 9222).
+                    Worker chạy trên máy tính kết nối cổng Chrome Remote Debugging 9245.
                   </p>
                 </div>
               </div>
 
               <div className="flex items-center gap-2">
-                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 font-mono">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                  Cổng: 9245 / 9222
-                </span>
+                {queueStatus?.worker?.online ? (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 font-mono">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                    <span>🟢 Worker Trực Tuyến ({queueStatus.worker.workerName || 'Port 9245'})</span>
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-rose-500/15 text-rose-400 border border-rose-500/30 font-mono">
+                    <span className="w-2 h-2 rounded-full bg-rose-400" />
+                    <span>🔴 Worker Chưa Kết Nối (Offline)</span>
+                  </span>
+                )}
               </div>
             </div>
+
+            {/** Hướng dẫn kích hoạt Worker khi Offline */}
+            {!queueStatus?.worker?.online && (
+              <div className="p-3.5 rounded-xl bg-slate-900/60 border border-amber-500/30 space-y-2">
+                <div className="flex items-center gap-2 text-amber-400 font-bold text-xs">
+                  <span className="material-symbols-outlined text-sm">info</span>
+                  <span>Hướng dẫn kích hoạt Muse Worker để vẽ ảnh Fanpage:</span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-slate-300">
+                  <div className="p-2.5 rounded-lg bg-slate-950/60 border border-white/5 space-y-1">
+                    <div className="font-bold text-emerald-400 flex items-center gap-1">
+                      <span>Bước 1: Mở Chrome Debugging</span>
+                    </div>
+                    <div className="text-[11px] text-slate-400">
+                      Chạy file <code className="text-white bg-slate-800 px-1 py-0.5 rounded font-mono">start_chrome_branding_muse.bat</code> và đăng nhập tài khoản Muse.ai trên trình duyệt vừa mở.
+                    </div>
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-slate-950/60 border border-white/5 space-y-1">
+                    <div className="font-bold text-teal-400 flex items-center gap-1">
+                      <span>Bước 2: Bật Worker Vẽ Ảnh</span>
+                    </div>
+                    <div className="text-[11px] text-slate-400">
+                      Chạy file <code className="text-white bg-slate-800 px-1 py-0.5 rounded font-mono">start_muse_branding_worker.bat</code>, worker sẽ tự động kết nối và vẽ tuần tự các page trong hàng đợi.
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/** Thống kê chi tiết Queue */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -916,6 +983,52 @@ export default function PageBrandingMuse() {
                 <div className="text-xl font-bold text-rose-400 mt-0.5">
                   {queueStatus?.queue?.failed || 0}
                 </div>
+              </div>
+            </div>
+
+            {/** Thanh Nút Điều Khiển Hàng Đợi */}
+            <div className="flex flex-wrap items-center justify-between gap-2.5 pt-2 border-t border-fb-surface-hover/30">
+              <div className="text-xs text-slate-400 flex items-center gap-1.5">
+                <span className="material-symbols-outlined text-sm text-slate-500">sync_saved_locally</span>
+                <span>Tự động cập nhật mỗi 10 giây</span>
+              </div>
+
+              <div className="flex items-center gap-2">
+                {((queueStatus?.queue?.processing || 0) > 0 || (queueStatus?.queue?.failed || 0) > 0) && (
+                  <button
+                    type="button"
+                    onClick={handleResetStuckJobs}
+                    className="px-3 py-1.5 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/30 text-cyan-300 font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
+                    title="Đưa các Page đang bị kẹt hoặc lỗi quay lại danh sách chờ"
+                  >
+                    <span className="material-symbols-outlined text-sm">lock_open</span>
+                    <span>Giải phóng Job kẹt ({((queueStatus?.queue?.processing || 0) + (queueStatus?.queue?.failed || 0))} Page)</span>
+                  </button>
+                )}
+
+                {(queueStatus?.queue?.totalActiveJobs || 0) > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleClearAllQueue}
+                    className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-rose-950/40 border border-slate-700 hover:border-rose-500/40 text-slate-300 hover:text-rose-400 font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
+                    title="Xóa toàn bộ Fanpage đang chờ vẽ khỏi hàng đợi"
+                  >
+                    <span className="material-symbols-outlined text-sm">delete_sweep</span>
+                    <span>Hủy hàng đợi</span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={refreshData}
+                  disabled={isRefreshing}
+                  className="px-3 py-1.5 rounded-xl bg-fb-surface-hover hover:bg-fb-surface-hover/80 text-white font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
+                >
+                  <span className={`material-symbols-outlined text-sm ${isRefreshing ? 'animate-spin text-emerald-400' : ''}`}>
+                    refresh
+                  </span>
+                  <span>Làm mới</span>
+                </button>
               </div>
             </div>
           </div>

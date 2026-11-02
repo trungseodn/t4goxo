@@ -27,7 +27,7 @@ const FormData = require('form-data');
 const args = process.argv.slice(2);
 
 const targetArg = args.find(a => a.startsWith('--target='));
-const TARGET_URL = (targetArg ? targetArg.split('=')[1] : (process.env.TARGET_URL || 'http://169.58.190.115:3004')).replace(/\/$/, '');
+const TARGET_URL = (targetArg ? targetArg.split('=')[1] : (process.env.TARGET_URL || 'https://t4.goxo.us')).replace(/\/$/, '');
 
 const chromePortArg = args.find(a => a.startsWith('--chrome-port='));
 const CHROME_PORT = chromePortArg ? chromePortArg.split('=')[1] : (process.env.CHROME_DEBUG_PORT || '9245');
@@ -46,6 +46,21 @@ if (!fs.existsSync(TEMP_DIR)) {
 }
 
 let isProcessing = false;
+
+/** Gửi Heartbeat báo trạng thái Worker còn sống về VPS */
+async function ztteam_sendHeartbeat() {
+  try {
+    await axios.post(`${TARGET_URL}/api/facebook/pages/branding/heartbeat`, {
+      workerName: WORKER_NAME,
+      chromePort: CHROME_PORT,
+      status: isProcessing ? 'BUSY' : 'IDLE',
+      timestamp: Date.now()
+    }, { timeout: 5000 });
+  } catch (err) {
+    // Bỏ qua lỗi ngầm khi heartbeat
+  }
+}
+
 
 /** Hàm đếm ngược thời gian nghỉ an toàn */
 async function ztteam_cooldown(seconds, reason) {
@@ -309,15 +324,38 @@ async function ztteam_processBrandingJob(job) {
       console.log(`💾 [${WORKER_NAME}] Đã lưu Avatar tạm: ${localAvatarPath} (${Math.round(avatarBuffer.length / 1024)} KB)`);
       avatarGenerated = true;
 
+      /** Lưu lũy tiến Avatar lên máy chủ ngay để đảm bảo không mất dữ liệu */
+      if (job.type === 'both') {
+        try {
+          console.log(`📤 [${WORKER_NAME}] [Lưu tiến độ] Đang gửi trước Avatar lên VPS...`);
+          const partialForm = new FormData();
+          partialForm.append('avatar', fs.createReadStream(localAvatarPath));
+          partialForm.append('stage', 'avatar');
+          partialForm.append('partial', 'true');
+          partialForm.append('autoApply', autoApply ? 'true' : 'false');
+          await axios.post(
+            `${TARGET_URL}/api/facebook/pages/branding/${pageId}/attach-result`,
+            partialForm,
+            { headers: partialForm.getHeaders(), timeout: 60000 }
+          );
+          console.log(`✅ [${WORKER_NAME}] Đã lưu trước Avatar thành công vào hệ thống!`);
+        } catch (partialErr) {
+          console.warn(`⚠️ [${WORKER_NAME}] Lưu Avatar lũy tiến gặp lỗi nhỏ (sẽ gộp ở bước cuối): ${partialErr.message}`);
+        }
+      }
+
       await new Promise(r => setTimeout(r, 3000));
     }
 
     /** 3. Tạo Cover nếu yêu cầu */
     if (job.type === 'cover' || job.type === 'both') {
       console.log(`\n🖼️ [${WORKER_NAME}] [2/2] Tiến hành tạo Ảnh Bìa (Cover Banner) cho "${pageName}"...`);
-      /** Reset tab Muse cho Cover */
-      await page.goto('https://muse.ai/', { waitUntil: 'domcontentloaded', timeout: 45000 });
-      await page.waitForSelector('textarea', { timeout: 25000 });
+      /** Đảm bảo tab Muse sẵn sàng cho Cover (giữ ngữ cảnh chat nếu đã có textarea) */
+      const hasTextarea = await page.$('textarea').catch(() => null);
+      if (!hasTextarea) {
+        await page.goto('https://muse.ai/', { waitUntil: 'domcontentloaded', timeout: 45000 });
+        await page.waitForSelector('textarea', { timeout: 25000 });
+      }
       await new Promise(r => setTimeout(r, 2000));
 
       const coverPrompt = (job.coverPrompt || `Thiết kế ảnh bìa (cover banner) Facebook ngang tỉ lệ 16:9 (1920x1080) cho fanpage "${pageName}", chủ đề hấp dẫn, bố cục cân đối chừa khoảng trống cho avatar`).replace(/\{PAGE_NAME\}/g, pageName);
@@ -333,6 +371,8 @@ async function ztteam_processBrandingJob(job) {
     console.log(`\n📤 [${WORKER_NAME}] Đang tải ảnh thành phẩm lên máy chủ VPS (${TARGET_URL})...`);
     const formData = new FormData();
     formData.append('autoApply', autoApply ? 'true' : 'false');
+    formData.append('partial', 'false');
+    formData.append('stage', job.type || 'both');
 
     if (avatarGenerated && fs.existsSync(localAvatarPath)) {
       formData.append('avatar', fs.createReadStream(localAvatarPath));
@@ -430,6 +470,10 @@ console.log(`🌐 Máy chủ VPS : ${TARGET_URL}`);
 console.log(`🔌 Cổng Chrome : ${CHROME_DEBUG_URL}`);
 console.log(`📂 Thư mục tạm : ${TEMP_DIR}`);
 console.log(`========================================================\n`);
+
+// Bật gửi Heartbeat định kỳ 15 giây
+setInterval(ztteam_sendHeartbeat, 15000);
+ztteam_sendHeartbeat();
 
 setInterval(ztteam_brandingWorkerLoop, POLL_INTERVAL_MS);
 ztteam_brandingWorkerLoop();

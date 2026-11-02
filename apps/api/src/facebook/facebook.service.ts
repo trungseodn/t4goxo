@@ -9,6 +9,14 @@ import { firstValueFrom } from 'rxjs';
 @Injectable()
 export class ZTTeamFacebookService {
   private readonly logger = new Logger(ZTTeamFacebookService.name);
+  private lastBrandingWorkerPingAt: Date | null = null;
+  private lastBrandingWorkerName: string | null = null;
+
+  ztteam_recordBrandingWorkerHeartbeat(workerName?: string) {
+    this.lastBrandingWorkerPingAt = new Date();
+    if (workerName) this.lastBrandingWorkerName = workerName;
+    return { success: true, timestamp: this.lastBrandingWorkerPingAt };
+  }
   private readonly API_VERSION = 'v25.0';
 
   constructor(
@@ -2416,7 +2424,16 @@ export class ZTTeamFacebookService {
     localPath: string;
     engine: 'source_original';
   }> {
-    throw new BadRequestException('Tính năng tạo ảnh Branding bằng SangTao.ai đã được gỡ bỏ khỏi hệ thống.');
+    try {
+      const res = await this.aiService.ztteam_renderImageWithDallE(prompt, aspectRatio);
+      return {
+        imageUrl: res.imageUrl,
+        localPath: res.localPath,
+        engine: 'source_original',
+      };
+    } catch (err: any) {
+      throw new BadRequestException('Không thể tạo ảnh Branding: ' + (err.message || 'Lỗi dịch vụ AI'));
+    }
   }
 
   /**
@@ -3252,6 +3269,7 @@ export class ZTTeamFacebookService {
    * Tự động giải phóng job kẹt > 15 phút
    */
   async ztteam_getPendingBrandingJob() {
+    this.lastBrandingWorkerPingAt = new Date();
     const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000);
     await this.prisma.ztteam_pages.updateMany({
       where: {
@@ -3331,7 +3349,10 @@ export class ZTTeamFacebookService {
     avatarUrl?: string;
     coverUrl?: string;
     error?: string;
+    partial?: boolean | string;
+    stage?: 'avatar' | 'cover' | 'both';
   }) {
+    this.lastBrandingWorkerPingAt = new Date();
     const page = await this.prisma.ztteam_pages.findFirst({
       where: {
         OR: [{ id: pageId }, { fb_page_id: pageId }]
@@ -3354,8 +3375,9 @@ export class ZTTeamFacebookService {
       return { success: false, message: `Ghi nhận lỗi từ Muse Worker: ${data.error}` };
     }
 
+    const isPartial = data.partial === true || data.partial === 'true';
     const updateData: any = {
-      branding_status: 'COMPLETED',
+      branding_status: isPartial ? 'PROCESSING' : 'COMPLETED',
       branding_error: null,
       branding_updated_at: new Date(),
     };
@@ -3386,7 +3408,7 @@ export class ZTTeamFacebookService {
     let applyMessage = '';
     const shouldAutoApply = (page as any).branding_auto_apply ?? true;
 
-    if (shouldAutoApply) {
+    if (shouldAutoApply && !isPartial) {
       try {
         const applyRes = await this.ztteam_applyPageBranding(page.id, {
           avatarUrl: updateData.branding_avatar_url,
@@ -3455,8 +3477,15 @@ export class ZTTeamFacebookService {
       }
     });
 
+    const isWorkerOnline = !!this.lastBrandingWorkerPingAt && (Date.now() - this.lastBrandingWorkerPingAt.getTime()) < 35000;
+
     return {
       success: true,
+      worker: {
+        online: isWorkerOnline,
+        lastPingAt: this.lastBrandingWorkerPingAt,
+        workerName: this.lastBrandingWorkerName || 'Branding-9245',
+      },
       queue: {
         pending,
         processing,
@@ -3471,6 +3500,38 @@ export class ZTTeamFacebookService {
         missingBothCount,
       }
     };
+  }
+
+  /**
+   * ZTTeam: Đặt lại toàn bộ hàng đợi hoặc giải phóng các job bị kẹt
+   */
+  async ztteam_resetAllPendingAndProcessingBrandingJobs(options?: { resetAll?: boolean }) {
+    if (options?.resetAll) {
+      const res = await this.prisma.ztteam_pages.updateMany({
+        where: {
+          is_active: true,
+          branding_status: { in: ['PENDING', 'PROCESSING', 'FAILED'] }
+        } as any,
+        data: {
+          branding_status: 'NONE',
+          branding_error: null,
+          branding_updated_at: new Date()
+        } as any
+      });
+      return { success: true, count: res.count, message: `Đã hủy và làm sạch ${res.count} Fanpage khỏi hàng đợi` };
+    } else {
+      const res = await this.prisma.ztteam_pages.updateMany({
+        where: {
+          is_active: true,
+          branding_status: { in: ['PROCESSING', 'FAILED'] }
+        } as any,
+        data: {
+          branding_status: 'PENDING',
+          branding_updated_at: new Date()
+        } as any
+      });
+      return { success: true, count: res.count, message: `Đã giải phóng ${res.count} Fanpage bị kẹt quay lại hàng đợi chờ vẽ` };
+    }
   }
 
   /**

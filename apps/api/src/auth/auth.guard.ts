@@ -16,6 +16,7 @@ export class ZTTeamAuthGuard implements CanActivate {
     const reqPath = request.path || request.url || '';
     if (
       reqPath.includes('/branding/pending-job') || 
+      reqPath.includes('/branding/heartbeat') || 
       (reqPath.includes('/branding/') && (reqPath.includes('/attach-result') || reqPath.includes('/reset')))
     ) {
       return true;

@@ -229,55 +229,128 @@ export default function MetaBusinessHub() {
             return (
               <div key={biz.id} className="bg-fb-surface rounded-2xl shadow-lg border border-slate-700/50 overflow-hidden">
                 {/** Header Card của BM */}
-                <div className="p-5 bg-fb-surface-hover/50 flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-700/40">
-                  <div className="flex items-start gap-3.5">
-                    <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-600 to-cyan-500 text-white flex items-center justify-center font-black text-xl shrink-0 shadow-md">
-                      <span className="material-symbols-outlined text-2xl">corporate_fare</span>
+                <div className="p-5 bg-fb-surface-hover/50 border-b border-slate-700/40 space-y-4">
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div className="flex items-start gap-3.5">
+                      <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-600 to-cyan-500 text-white flex items-center justify-center font-black text-xl shrink-0 shadow-md">
+                        <span className="material-symbols-outlined text-2xl">corporate_fare</span>
+                      </div>
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="text-lg font-black text-fb-text tracking-tight">{biz.businessName || 'Doanh Nghiệp BM'}</h3>
+                          <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-blue-500/15 text-blue-400 border border-blue-500/30">
+                            {isSystemUser ? '⚡ BM System User' : '👤 Tài Khoản Cá Nhân'}
+                          </span>
+                          <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                            <span>{biz.tokenExpiry === 'NEVER' ? 'Vĩnh Viễn (Never Expire)' : 'Đang Hoạt Động'}</span>
+                          </span>
+                          {biz.businessId && (
+                            <span className="px-2.5 py-0.5 rounded-full text-[11px] font-mono font-bold bg-slate-800 text-slate-300 border border-slate-700">
+                              BM ID: {biz.businessId}
+                            </span>
+                          )}
+                        </div>
+                      </div>
                     </div>
-                    <div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h3 className="text-lg font-black text-fb-text tracking-tight">{biz.businessName || 'Doanh Nghiệp BM'}</h3>
-                        <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-blue-500/15 text-blue-400 border border-blue-500/30">
-                          {isSystemUser ? '⚡ BM System User' : '👤 Tài Khoản Cá Nhân'}
-                        </span>
-                        <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                          <span>{biz.tokenExpiry === 'NEVER' ? 'Vĩnh Viễn (Never Expire)' : 'Đang Hoạt Động'}</span>
-                        </span>
-                      </div>
 
-                      <div className="flex flex-wrap items-center gap-3 mt-1.5 text-xs text-fb-text-muted font-medium">
-                        {biz.businessId && (
-                          <span>BM ID: <b className="text-slate-300 font-semibold">{biz.businessId}</b></span>
-                        )}
-                        <span>•</span>
-                        <span>System User: <b className="text-blue-400 font-semibold">{biz.name}</b></span>
-                        <span>•</span>
-                        <span>Meta App: <b className="text-emerald-400 font-semibold">{biz.appName || 'Meta App'}</b> {biz.appId ? `(${biz.appId})` : ''}</span>
-                      </div>
+                    {/** Action buttons tren Header BM */}
+                    <div className="flex items-center gap-2 self-end md:self-center shrink-0">
+                      <button
+                        onClick={() => handleSyncAccount(biz.id, biz.businessName || biz.name)}
+                        disabled={isSyncing}
+                        className="px-3.5 py-2 bg-fb-surface-hover hover:bg-slate-700 text-fb-text rounded-full text-xs font-bold flex items-center gap-1.5 transition-colors disabled:opacity-50 cursor-pointer shadow-xs"
+                        title="Quét tìm Fanpage mới được gán cho tài khoản này"
+                      >
+                        <span className={`material-symbols-outlined text-sm ${isSyncing ? 'animate-spin text-blue-400' : ''}`}>sync</span>
+                        <span>Đồng Bộ Fanpage</span>
+                      </button>
+
+                      <button
+                        onClick={() => handleDeleteBusiness(biz.id, biz.businessName || biz.name)}
+                        className="px-3.5 py-2 bg-red-500/10 hover:bg-red-500 text-red-400 hover:text-white rounded-full text-xs font-bold flex items-center gap-1 transition-colors cursor-pointer"
+                        title="Hủy kết nối Doanh Nghiệp này"
+                      >
+                        <span className="material-symbols-outlined text-sm">delete</span>
+                        <span>Hủy BM</span>
+                      </button>
                     </div>
                   </div>
 
-                  {/** Action buttons tren Header BM */}
-                  <div className="flex items-center gap-2 self-end md:self-center shrink-0">
-                    <button
-                      onClick={() => handleSyncAccount(biz.id, biz.businessName || biz.name)}
-                      disabled={isSyncing}
-                      className="px-3 py-1.5 bg-fb-surface-hover hover:bg-slate-700 text-fb-text rounded-full text-xs font-bold flex items-center gap-1.5 transition-colors disabled:opacity-50"
-                      title="Quét tìm Fanpage mới được gán cho System User này"
-                    >
-                      <span className={`material-symbols-outlined text-sm ${isSyncing ? 'animate-spin' : ''}`}>sync</span>
-                      <span>Đồng Bộ Fanpage</span>
-                    </button>
+                  {/** 4 Khối thông tin chi tiết đầy đủ: Tên tài khoản, User ID, App ID, Số lượng Fanpage */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-2">
+                    {/** 1. Tên tài khoản */}
+                    <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-700/60 flex flex-col justify-between">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-[15px] text-blue-400">person</span>
+                        <span>Tên Tài Khoản</span>
+                      </div>
+                      <div className="text-xs sm:text-sm font-bold text-white mt-1.5 truncate" title={biz.name || biz.businessName}>
+                        {biz.name || biz.businessName || 'Không tên'}
+                      </div>
+                    </div>
 
-                    <button
-                      onClick={() => handleDeleteBusiness(biz.id, biz.businessName || biz.name)}
-                      className="px-3 py-1.5 bg-red-500/10 hover:bg-red-500 text-red-400 hover:text-white rounded-full text-xs font-bold flex items-center gap-1 transition-colors"
-                      title="Hủy kết nối Doanh Nghiệp này"
-                    >
-                      <span className="material-symbols-outlined text-sm">delete</span>
-                      <span>Hủy BM</span>
-                    </button>
+                    {/** 2. User ID */}
+                    <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-700/60 flex flex-col justify-between">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-[15px] text-cyan-400">badge</span>
+                        <span>User ID (Facebook)</span>
+                      </div>
+                      <div className="text-xs sm:text-sm font-mono font-bold text-cyan-300 mt-1.5 flex items-center justify-between gap-1">
+                        <span className="truncate">{biz.fbUserId || 'N/A'}</span>
+                        {biz.fbUserId && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText(biz.fbUserId);
+                              ztteam_showToast('Đã sao chép User ID!', 'success');
+                            }}
+                            className="p-1 hover:bg-slate-800 rounded text-slate-400 hover:text-white transition-colors cursor-pointer shrink-0"
+                            title="Sao chép User ID"
+                          >
+                            <span className="material-symbols-outlined text-[15px]">content_copy</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/** 3. App ID */}
+                    <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-700/60 flex flex-col justify-between">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-[15px] text-emerald-400">apps</span>
+                        <span>App ID</span>
+                      </div>
+                      <div className="text-xs sm:text-sm font-mono font-bold text-emerald-400 mt-1.5 flex items-center justify-between gap-1">
+                        <span className="truncate" title={biz.appName ? `${biz.appId} (${biz.appName})` : biz.appId}>
+                          {biz.appId || 'N/A'} {biz.appName ? <span className="text-[11px] font-sans font-normal text-slate-400">({biz.appName})</span> : null}
+                        </span>
+                        {biz.appId && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText(biz.appId);
+                              ztteam_showToast('Đã sao chép App ID!', 'success');
+                            }}
+                            className="p-1 hover:bg-slate-800 rounded text-slate-400 hover:text-white transition-colors cursor-pointer shrink-0"
+                            title="Sao chép App ID"
+                          >
+                            <span className="material-symbols-outlined text-[15px]">content_copy</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/** 4. Số lượng Fanpage */}
+                    <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-700/60 flex flex-col justify-between">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-[15px] text-amber-400">flag</span>
+                        <span>Số Lượng Fanpage</span>
+                      </div>
+                      <div className="text-xs sm:text-sm font-black text-amber-400 mt-1.5 flex items-center gap-1.5">
+                        <span className="text-base sm:text-lg">{biz.pages?.length || biz.pagesCount || 0}</span>
+                        <span className="text-[11px] font-normal text-slate-400">Fanpage trực thuộc</span>
+                      </div>
+                    </div>
                   </div>
                 </div>
 

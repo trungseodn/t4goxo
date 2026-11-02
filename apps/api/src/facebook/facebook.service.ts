@@ -482,6 +482,7 @@ export class ZTTeamFacebookService {
 
     return fbAccounts.map(acc => ({
       id: acc.id,
+      name: acc.name,
       fbUserId: acc.fb_user_id,
       accountType: acc.business_id ? (acc.account_type || 'SYSTEM_USER') : 'PERSONAL',
       businessId: acc.business_id,

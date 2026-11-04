@@ -651,18 +651,22 @@ export class ZTTeamFacebookService {
     });
 
     try {
-      const recentFailedPosts = await this.prisma.ztteam_images.findMany({
-        where: {
-          page_id: { in: pages.map(p => p.id) },
-          status: 'FAILED',
-          error_log: { contains: '4854002' },
-          updated_at: { gte: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000) }
-        },
-        select: { page_id: true }
-      });
-      recentFailedPosts.forEach(post => {
-        if (post.page_id) checkpointPageIds.add(post.page_id);
-      });
+      /** ZTTeam: Chỉ kiểm tra thêm bài lỗi nếu page chưa được kích hoạt/xác nhận là active */
+      const pagesToCheck = pages.filter(p => p.token_status !== 'active').map(p => p.id);
+      if (pagesToCheck.length > 0) {
+        const recentFailedPosts = await this.prisma.ztteam_images.findMany({
+          where: {
+            page_id: { in: pagesToCheck },
+            status: 'FAILED',
+            error_log: { contains: '4854002' },
+            updated_at: { gte: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000) }
+          },
+          select: { page_id: true }
+        });
+        recentFailedPosts.forEach(post => {
+          if (post.page_id) checkpointPageIds.add(post.page_id);
+        });
+      }
     } catch (e: any) {
       /** Bỏ qua lỗi phụ */
     }
@@ -775,7 +779,7 @@ export class ZTTeamFacebookService {
     const times = await this.ztteam_computePageTimesAndNextVideo(page);
 
     let isCheckpointBlocked = page.token_status === 'checkpoint_required';
-    if (!isCheckpointBlocked) {
+    if (!isCheckpointBlocked && page.token_status !== 'active') {
       try {
         const recentFailed = await this.prisma.ztteam_images.findFirst({
           where: {
@@ -946,6 +950,41 @@ export class ZTTeamFacebookService {
     }
 
     return { success: true };
+  }
+
+  /**
+   * ZTTeam: Xác nhận Quản trị viên đã hoàn tất xác minh danh tính trên điện thoại
+   * Mở lại tính năng đăng bài và xóa trạng thái checkpoint_required cho Fanpage
+   */
+  async ztteam_clearCheckpoint(pageId: string, userId: string) {
+    const page = await this.prisma.ztteam_pages.findFirst({
+      where: {
+        OR: [
+          { fb_page_id: pageId },
+          { id: pageId }
+        ]
+      },
+      include: {
+        fb_account: true
+      }
+    });
+
+    if (!page || page.fb_account.owner_user_id !== userId) {
+      throw new Error('Fanpage không tồn tại hoặc bạn không có quyền');
+    }
+
+    await this.prisma.ztteam_pages.update({
+      where: { id: page.id },
+      data: {
+        token_status: 'active',
+        auto_publish_enabled: true
+      }
+    });
+
+    return {
+      success: true,
+      message: `Đã xác nhận mở checkpoint thành công cho Fanpage "${page.name}". Tính năng tự động đăng đã được kích hoạt lại.`
+    };
   }
 
   /**

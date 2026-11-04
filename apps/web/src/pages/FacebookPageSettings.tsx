@@ -32,6 +32,7 @@ export default function FacebookPageSettings() {
   const [fbPageId, setFbPageId] = useState('');
   const [pageAvatar, setPageAvatar] = useState<string | null>(null);
   const [isCheckpointBlocked, setIsCheckpointBlocked] = useState<boolean>(false);
+  const [isClearingCheckpoint, setIsClearingCheckpoint] = useState<boolean>(false);
   const [availableTags, setAvailableTags] = useState<string[]>([]);
   const [tags, setTags] = useState<string[]>([]);
   const [tagInput, setTagInput] = useState('');
@@ -398,6 +399,22 @@ export default function FacebookPageSettings() {
       ztteam_showToast(error.response?.data?.message || 'Lỗi lưu cấu hình', 'error');
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  /** Xác nhận mở checkpoint sau khi đã xác minh danh tính trên điện thoại */
+  const ztteam_handleClearCheckpoint = async () => {
+    if (!id) return;
+    try {
+      setIsClearingCheckpoint(true);
+      const res = await api.post(`facebook/pages/${id}/clear-checkpoint`);
+      ztteam_showToast(res.data?.message || 'Đã xác nhận mở checkpoint thành công! Tự động đăng đã được kích hoạt lại.', 'success');
+      setIsCheckpointBlocked(false);
+      setAutoPublishEnabled(true);
+    } catch (err: any) {
+      ztteam_showToast(err.response?.data?.message || 'Lỗi khi mở checkpoint', 'error');
+    } finally {
+      setIsClearingCheckpoint(false);
     }
   };
 
@@ -838,7 +855,7 @@ export default function FacebookPageSettings() {
               </div>
 
               {isCheckpointBlocked && (
-                <div className="bg-amber-500/10 p-4 rounded-xl border border-amber-500/30 text-xs text-amber-200 space-y-2">
+                <div className="bg-amber-500/10 p-4 rounded-xl border border-amber-500/30 text-xs text-amber-200 space-y-3">
                   <div className="flex items-center gap-2 font-bold text-amber-400 text-sm">
                     <span className="material-symbols-outlined text-[20px]">shield_lock</span>
                     <span>Fanpage đang bị Facebook tạm chặn đăng (Mã 368 / Subcode 4854002)</span>
@@ -846,11 +863,24 @@ export default function FacebookPageSettings() {
                   <p className="text-[11px] text-slate-300 leading-relaxed">
                     Hệ thống đã tự động kích hoạt Circuit Breaker tắt tự động đăng để bảo vệ BM và các Page khác. Để tiếp tục xuất bản:
                   </p>
-                  <ol className="list-decimal list-inside text-[11px] text-amber-300 space-y-1 bg-black/30 p-2.5 rounded-lg border border-amber-500/20 font-medium">
+                  <ol className="list-decimal list-inside text-[11px] text-amber-300 space-y-1.5 bg-black/30 p-2.5 rounded-lg border border-amber-500/20 font-medium">
                     <li>Mở app Facebook trên điện thoại Admin ➔ Chuyển sang Page <b>{pageName}</b></li>
                     <li>Đăng thử 1 bài viết ("Test") ➔ Hoàn tất thông báo xác nhận danh tính trên điện thoại</li>
-                    <li>Quay lại đây, gạt bật lại nút <b>"Tự động đăng"</b> ở trên và bấm <b>Lưu cài đặt</b></li>
+                    <li>Sau khi xác nhận xong trên Facebook, bấm nút dưới đây để gỡ cảnh báo và kích hoạt lại tự động đăng:</li>
                   </ol>
+                  <div className="pt-1 flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={ztteam_handleClearCheckpoint}
+                      disabled={isClearingCheckpoint}
+                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-emerald-500/20 flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                    >
+                      <span className={`material-symbols-outlined text-base ${isClearingCheckpoint ? 'animate-spin' : ''}`}>
+                        {isClearingCheckpoint ? 'progress_activity' : 'verified_user'}
+                      </span>
+                      <span>{isClearingCheckpoint ? 'Đang mở lại...' : 'Tôi đã xác minh trên điện thoại — Mở lại ngay'}</span>
+                    </button>
+                  </div>
                 </div>
               )}
 

@@ -649,6 +649,93 @@ export class ZTTeamImageController {
     };
   }
 
+  /**
+   * ZTTeam: Đưa các bài viết bị lỗi đăng Fanpage về hàng chờ sẵn sàng đăng (COMPLETED)
+   * và xếp lại lịch đăng theo cấu hình Fanpage
+   * POST /api/image/retry-failed-posts
+   */
+  @Post('retry-failed-posts')
+  @UseGuards(ZTTeamAuthGuard)
+  async ztteam_retryFailedPosts(
+    @Body() body: { pageId?: string; scheduleMode?: 'next_slot' | 'end_queue' }
+  ) {
+    const where: any = { status: 'FAILED' };
+    if (body?.pageId) {
+      where.page_id = body.pageId;
+    }
+
+    const failedPosts = await this.prisma.ztteam_images.findMany({
+      where,
+      orderBy: { created_at: 'asc' },
+      select: { id: true, image_url: true, created_at: true, page_id: true }
+    });
+
+    if (failedPosts.length === 0) {
+      return {
+        success: true,
+        count: 0,
+        message: 'Không có bài viết lỗi đăng nào cần khôi phục'
+      };
+    }
+
+    const scheduleMode = body?.scheduleMode || 'next_slot';
+    const now = new Date();
+
+    let updatedCount = 0;
+
+    for (let i = 0; i < failedPosts.length; i++) {
+      const post = failedPosts[i];
+      const hasImage = Boolean(post.image_url);
+
+      const updateData: any = {
+        status: hasImage ? 'COMPLETED' : 'QUEUED',
+        error_log: null,
+        post_retry_count: 0,
+        is_posted: false,
+        updated_at: new Date(),
+      };
+
+      if (scheduleMode === 'end_queue') {
+        // Nối tiếp vào cuối hàng chờ: đặt created_at từ thời điểm hiện tại trở đi, giãn cách 1 giây để bảo toàn thứ tự ban đầu
+        updateData.created_at = new Date(now.getTime() + i * 1000);
+      }
+
+      await this.prisma.ztteam_images.update({
+        where: { id: post.id },
+        data: updateData,
+      });
+
+      updatedCount++;
+    }
+
+    // Đồng thời khôi phục các reel nếu có reel bị FAILED của các page này
+    try {
+      await this.prisma.ztteam_reels.updateMany({
+        where: {
+          status: 'FAILED',
+          ...(body?.pageId ? { page_id: body.pageId } : {}),
+        },
+        data: {
+          status: 'COMPLETED',
+          error_log: null,
+          post_retry_count: 0,
+          is_posted: false,
+          updated_at: new Date(),
+        }
+      });
+    } catch (e) {
+      // bỏ qua lỗi nếu không có reels
+    }
+
+    this.logger.log(`[Batch Retry Failed Posts] Reset ${updatedCount} failed posts to COMPLETED/QUEUED (scheduleMode: ${scheduleMode}, pageId: ${body?.pageId || 'ALL'})`);
+
+    return {
+      success: true,
+      count: updatedCount,
+      message: `Đã đưa ${updatedCount} bài viết lỗi về hàng chờ sẵn sàng đăng và xếp lại lịch thành công.`
+    };
+  }
+
   @Post(':id/post-to-fb')
   @UseGuards(ZTTeamAuthGuard)
   async ztteam_postToFb(@Param('id') id: string) {
@@ -945,11 +1032,17 @@ export class ZTTeamImageController {
    */
   @Post('retry/:id')
   @UseGuards(ZTTeamAuthGuard)
-  async ztteam_retryImage(@Param('id') id: string, @Query('force') force?: string) {
+  async ztteam_retryImage(
+    @Param('id') id: string,
+    @Query('force') force?: string,
+    @Query('placement') placement?: 'next_slot' | 'end_queue',
+    @Body() body?: { force?: boolean | string; placement?: 'next_slot' | 'end_queue' }
+  ) {
     const image = await this.prisma.ztteam_images.findUnique({ where: { id } });
     if (!image) throw new Error('Image not found');
 
-    const shouldForceRecreate = force === 'true' || force === '1';
+    const shouldForceRecreate = force === 'true' || force === '1' || body?.force === true || body?.force === 'true';
+    const schedulePlacement = placement || body?.placement || 'next_slot';
 
     /** Kiểm tra xem ảnh đã có sẵn file ảnh hợp lệ trên đĩa hay chưa */
     let hasExistingImageFile = false;
@@ -974,18 +1067,24 @@ export class ZTTeamImageController {
 
     /** Nếu đã có file ảnh và không ép buộc tạo lại ảnh: CHỈ LÀM MỚI KHUNG GIỜ VÀ ĐẶT LẠI TRẠNG THÁI COMPLETED */
     if (hasExistingImageFile && !shouldForceRecreate) {
+      const updateData: any = {
+        status: 'COMPLETED',
+        error_log: null,
+        post_retry_count: 0,
+        is_posted: false,
+        updated_at: new Date(),
+      };
+      if (schedulePlacement === 'end_queue') {
+        updateData.created_at = new Date();
+      }
       const updated = await this.prisma.ztteam_images.update({
         where: { id },
-        data: {
-          status: 'COMPLETED',
-          error_log: null,
-          post_retry_count: 0,
-        }
+        data: updateData
       });
       this.eventEmitter.emit('image.updated', updated);
       return {
         success: true,
-        message: 'Đã làm mới lại khung giờ xuất bản (giữ nguyên ảnh)',
+        message: 'Đã đưa về hàng chờ sẵn sàng đăng và xếp lại lịch thành công',
         mode: 'rescheduled',
         image: updated,
       };

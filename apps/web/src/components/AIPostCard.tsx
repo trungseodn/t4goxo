@@ -162,7 +162,7 @@ export default function ZTTeamAIPostCard({
         );
       case 'FAILED':
         return (
-          <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30 flex items-center gap-1">
+          <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-red-500/20 text-red-300 border border-red-500/30 flex items-center gap-1">
             <span className="material-symbols-outlined text-[13px]">sync_problem</span>
             Lỗi đăng Fanpage
           </span>
@@ -455,9 +455,25 @@ export default function ZTTeamAIPostCard({
               />
               {/** ZTTeam: Nếu bị lỗi đăng Facebook nhưng ảnh đã có: Hiển thị banner cảnh báo dưới chân ảnh */}
               {isFailed && (
-                <div className="absolute inset-x-0 bottom-0 bg-rose-950/90 backdrop-blur-sm p-2 text-rose-200 text-[10px] flex items-center gap-1.5 shadow-md">
-                  <span className="material-symbols-outlined text-sm text-rose-400 shrink-0">error</span>
-                  <span className="truncate flex-1 font-medium">{item.error_log || 'Lỗi xuất bản Facebook'}</span>
+                <div className="absolute inset-x-0 bottom-0 bg-red-950/90 backdrop-blur-sm p-2 text-red-200 text-[10px] flex items-center justify-between gap-1.5 shadow-md">
+                  <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                    <span className="material-symbols-outlined text-sm text-red-400 shrink-0">error</span>
+                    <span className="truncate font-medium">{item.error_log || 'Lỗi xuất bản Facebook'}</span>
+                  </div>
+                  {onRetry && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onRetry(item);
+                      }}
+                      className="px-2 py-0.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-md text-[10px] font-bold shrink-0 flex items-center gap-1 transition-all shadow-xs cursor-pointer"
+                      title="Đưa về hàng chờ sẵn sàng đăng và xếp lại lịch"
+                    >
+                      <span className="material-symbols-outlined text-[12px]">event_repeat</span>
+                      <span>Sẵn sàng đăng</span>
+                    </button>
+                  )}
                 </div>
               )}
               <div className="absolute inset-0 bg-black/0 group-hover/media:bg-black/30 transition-colors flex items-center justify-center opacity-0 group-hover/media:opacity-100">
@@ -711,7 +727,19 @@ export default function ZTTeamAIPostCard({
             </button>
           )}
 
-          {(isFailed || item.status === 'COMPLETED') && onRetry && (
+          {isFailed && onRetry && (
+            <button
+              type="button"
+              onClick={() => onRetry(item)}
+              className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all flex items-center gap-1 border border-emerald-500/30 cursor-pointer shadow-sm"
+              title="Đưa bài viết về hàng chờ sẵn sàng đăng và xếp lại lịch"
+            >
+              <span className="material-symbols-outlined text-[15px]">event_repeat</span>
+              <span>Sẵn sàng đăng</span>
+            </button>
+          )}
+
+          {!isFailed && item.status === 'COMPLETED' && onRetry && (
             <button
               type="button"
               onClick={() => onRetry(item)}

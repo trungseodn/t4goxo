@@ -28,13 +28,33 @@ const FB_POPULAR_CATEGORIES = [
 ];
 
 /** Component FanpageCard chuẩn Grid Card tích hợp 3 biểu đồ xu hướng sparkline mini */
-function FanpageCard({ page, isExpired, testingPageId, handleTestPost, handleToggleActive, isSelected, onToggleSelect }: any) {
+function FanpageCard({ page, isExpired, testingPageId, handleTestPost, handleToggleActive, isSelected, onToggleSelect, onRefresh }: any) {
   const navigate = useNavigate();
   const { ztteam_getPageReport, ztteam_deletePage } = useZTTeamFacebookStore();
   const { ztteam_showToast, ztteam_showConfirm } = useUIStore();
   const [insights, setInsights] = useState<any>(null);
+  const [isClearingCheckpoint, setIsClearingCheckpoint] = useState(false);
 
   const isCurrentlyActive = page.isActive !== false;
+
+  const handleClearCheckpointClick = async () => {
+    const confirm = await ztteam_showConfirm(
+      'Mở lại Fanpage đã xác minh danh tính',
+      `Bạn xác nhận đã mở ứng dụng Facebook trên điện thoại và hoàn tất xác minh cho Trang "${page.name}"? Hệ thống sẽ gỡ bỏ cảnh báo và kích hoạt lại tính năng tự động đăng bài.`
+    );
+    if (!confirm) return;
+
+    try {
+      setIsClearingCheckpoint(true);
+      const res = await api.post(`facebook/pages/${page.id}/clear-checkpoint`);
+      ztteam_showToast(res.data?.message || 'Đã mở lại Fanpage thành công!', 'success');
+      if (onRefresh) onRefresh();
+    } catch (err: any) {
+      ztteam_showToast(err.response?.data?.message || 'Lỗi khi mở lại Fanpage', 'error');
+    } finally {
+      setIsClearingCheckpoint(false);
+    }
+  };
 
   const handleToggleActiveClick = async () => {
     const confirm = await ztteam_showConfirm(
@@ -557,6 +577,21 @@ function FanpageCard({ page, isExpired, testingPageId, handleTestPost, handleTog
             <span className="material-symbols-outlined text-base sm:text-sm">settings</span>
             <span className="hidden sm:inline">Cài đặt</span>
           </button>
+
+          {page.isCheckpointBlocked && (
+            <button
+              type="button"
+              onClick={handleClearCheckpointClick}
+              disabled={isClearingCheckpoint}
+              className="h-8 sm:h-9 px-2.5 sm:px-3.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-full font-bold text-xs flex items-center justify-center gap-1.5 transition-all shadow-md shrink-0 cursor-pointer disabled:opacity-50"
+              title="Tôi đã xác minh trên điện thoại — Mở lại ngay"
+            >
+              <span className={`material-symbols-outlined text-sm ${isClearingCheckpoint ? 'animate-spin' : ''}`}>
+                {isClearingCheckpoint ? 'progress_activity' : 'verified_user'}
+              </span>
+              <span className="hidden sm:inline">{isClearingCheckpoint ? 'Đang mở...' : 'Đã xác minh'}</span>
+            </button>
+          )}
         </div>
 
         <div className="flex items-center gap-1.5">
@@ -1454,6 +1489,7 @@ export default function FacebookPages() {
                   handleToggleActive={handleTogglePageActive}
                   isSelected={selectedPageIds.includes(page.id)}
                   onToggleSelect={handleToggleSelectPage}
+                  onRefresh={ztteam_fetchPagesFromDB}
                 />
               ))}
             </div>

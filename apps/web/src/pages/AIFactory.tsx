@@ -48,6 +48,10 @@ export default function AIFactory() {
   const [currentPage, setCurrentPage] = useState(1);
   const [limit, setLimit] = useState(24);
   const [isPosting, setIsPosting] = useState<Record<string, boolean>>({});
+  const [isRetryingFailedBatch, setIsRetryingFailedBatch] = useState(false);
+  const [showRescheduleModal, setShowRescheduleModal] = useState(false);
+  const [reschedulePlacement, setReschedulePlacement] = useState<'next_slot' | 'end_queue'>('next_slot');
+  const [singlePostToReschedule, setSinglePostToReschedule] = useState<any>(null);
 
   const { ztteam_showToast, ztteam_showConfirm } = useUIStore();
   const searchTimeoutRef = useRef<any>(null);
@@ -142,16 +146,61 @@ export default function AIFactory() {
     }
   };
 
-  /** Làm mới khung giờ / Thử lại */
+  /** Làm mới khung giờ / Thử lại / Xếp lại lịch */
   const ztteam_retryItem = async (itemOrId: any) => {
+    const item = typeof itemOrId === 'string' ? items.find(i => i.id === itemOrId) : itemOrId;
     const id = typeof itemOrId === 'string' ? itemOrId : itemOrId?.id;
     if (!id) return;
+
+    if (item && item.status === 'FAILED') {
+      setSinglePostToReschedule(item);
+      setShowRescheduleModal(true);
+      return;
+    }
+
     try {
       const res = await api.post(`image/retry/${id}`);
       ztteam_showToast(res.data?.message || 'Đã làm mới lại khung giờ xuất bản (giữ nguyên ảnh)', 'success');
       ztteam_loadItems();
     } catch (error: any) {
       ztteam_showToast(error.response?.data?.message || 'Lỗi làm mới', 'error');
+    }
+  };
+
+  /** Đưa hàng loạt bài lỗi đăng Fanpage về hàng chờ sẵn sàng đăng & xếp lại lịch */
+  const ztteam_handleRetryFailedPostsBatch = async () => {
+    try {
+      setIsRetryingFailedBatch(true);
+      const res = await api.post('image/retry-failed-posts', {
+        pageId: filterPage && filterPage !== 'MANUAL' ? filterPage : undefined,
+        scheduleMode: reschedulePlacement,
+      });
+      ztteam_showToast(res.data?.message || 'Đã đưa các bài viết về hàng chờ sẵn sàng đăng và xếp lại lịch thành công', 'success');
+      setShowRescheduleModal(false);
+      setSinglePostToReschedule(null);
+      ztteam_loadItems();
+    } catch (err: any) {
+      ztteam_showToast(err.response?.data?.message || 'Lỗi khi khôi phục bài viết', 'error');
+    } finally {
+      setIsRetryingFailedBatch(false);
+    }
+  };
+
+  /** Đưa 1 bài viết lỗi cụ thể về hàng chờ sẵn sàng đăng & xếp lại lịch */
+  const ztteam_handleRetrySinglePost = async (item: any, placement: 'next_slot' | 'end_queue' = 'next_slot') => {
+    const id = typeof item === 'string' ? item : item?.id;
+    if (!id) return;
+    try {
+      setIsRetryingFailedBatch(true);
+      const res = await api.post(`image/retry/${id}`, { placement });
+      ztteam_showToast(res.data?.message || 'Đã đưa về hàng chờ sẵn sàng đăng và xếp lại lịch thành công', 'success');
+      setShowRescheduleModal(false);
+      setSinglePostToReschedule(null);
+      ztteam_loadItems();
+    } catch (error: any) {
+      ztteam_showToast(error.response?.data?.message || 'Lỗi xếp lại lịch', 'error');
+    } finally {
+      setIsRetryingFailedBatch(false);
     }
   };
 
@@ -546,6 +595,52 @@ export default function AIFactory() {
         </div>
       </div>
 
+      {/** Banner Thao Tác Khôi Phục Bài Lỗi Đăng Fanpage Về Hàng Chờ Sẵn Sàng (Tab FAILED) */}
+      {filterStatus === 'FAILED' && (
+        <div className="bg-gradient-to-r from-emerald-500/15 via-blue-500/10 to-transparent p-4 rounded-2xl border border-emerald-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-md animate-in fade-in duration-200">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
+              <span className="material-symbols-outlined text-2xl">event_repeat</span>
+            </div>
+            <div>
+              <h4 className="text-sm font-black text-fb-text flex items-center gap-2">
+                <span>Khôi Phục Bài Lỗi Đăng Về Hàng Chờ Sẵn Sàng</span>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300">
+                  {counts.failed || 0} bài lỗi
+                </span>
+                {filterPage && filterPage !== 'MANUAL' && (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-500/20 text-blue-300">
+                    {pages.find(p => p.id === filterPage)?.name || 'Fanpage đã chọn'}
+                  </span>
+                )}
+              </h4>
+              <p className="text-xs text-fb-text-muted mt-0.5">
+                Đưa bài viết bị lỗi đăng Facebook về trạng thái <b>Sẵn sàng đăng</b> (COMPLETED), xóa lịch sử lỗi và tự động phân bổ lại lịch đăng chuẩn theo cấu hình Fanpage.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 w-full sm:w-auto">
+            <button
+              type="button"
+              disabled={isRetryingFailedBatch || !counts.failed}
+              onClick={() => {
+                setSinglePostToReschedule(null);
+                setShowRescheduleModal(true);
+              }}
+              className="w-full sm:w-auto px-4 py-2.5 bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-emerald-500/20 flex items-center justify-center gap-2 cursor-pointer"
+            >
+              <span className={`material-symbols-outlined text-[18px] ${isRetryingFailedBatch ? 'animate-spin' : ''}`}>
+                {isRetryingFailedBatch ? 'progress_activity' : 'event_repeat'}
+              </span>
+              <span>
+                {isRetryingFailedBatch ? 'Đang xử lý...' : 'Đưa về hàng chờ & Xếp lại lịch'}
+              </span>
+            </button>
+          </div>
+        </div>
+      )}
+
       {/** Banner Thao Tác Hàng Loạt Cho Mục Lỗi Video */}
       {(filterStatus === 'VIDEO_FAILED' || filterStatus === 'VIDEO_FAILED_POSTED' || filterVideoStatus === 'FAILED') && (
         <div className="bg-gradient-to-r from-amber-500/15 via-blue-500/10 to-transparent p-4 rounded-2xl border border-amber-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-md animate-in fade-in duration-200">
@@ -711,6 +806,145 @@ export default function AIFactory() {
           </div>
         )}
       </div>
+
+      {/** Modal Tùy Chọn Xếp Lại Lịch Đăng Cho Bài Lỗi */}
+      {(showRescheduleModal || singlePostToReschedule) && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-fb-surface border border-fb-surface-hover/60 rounded-2xl w-full max-w-lg shadow-2xl flex flex-col overflow-hidden">
+            {/** Header */}
+            <div className="px-6 py-4 border-b border-fb-surface-hover/60 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
+                  <span className="material-symbols-outlined text-xl">event_repeat</span>
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-base text-fb-text">
+                    {singlePostToReschedule ? 'Xếp Lại Lịch Cho Bài Viết' : 'Khôi Phục & Xếp Lại Lịch Đăng'}
+                  </h3>
+                  <p className="text-xs text-fb-text-muted mt-0.5 truncate max-w-sm">
+                    {singlePostToReschedule
+                      ? (singlePostToReschedule.wp_post_title || 'Bài viết đã chọn')
+                      : `Áp dụng cho ${counts.failed || 0} bài viết lỗi đăng ${filterPage && filterPage !== 'MANUAL' ? '(theo Fanpage đã lọc)' : '(toàn hệ thống)'}`}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowRescheduleModal(false);
+                  setSinglePostToReschedule(null);
+                }}
+                className="w-8 h-8 rounded-full bg-fb-surface-hover text-fb-text-muted hover:text-white flex items-center justify-center transition-colors cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-base">close</span>
+              </button>
+            </div>
+
+            {/** Body */}
+            <div className="p-6 space-y-4">
+              <p className="text-xs text-fb-text-muted leading-relaxed">
+                Chọn phương thức phân bổ thứ tự xuất bản cho bài viết sau khi đưa về hàng chờ:
+              </p>
+
+              <div className="space-y-3">
+                {/** Lựa chọn 1: Khung giờ kế tiếp gần nhất */}
+                <label
+                  onClick={() => setReschedulePlacement('next_slot')}
+                  className={`flex items-start gap-3 p-3.5 rounded-xl border transition-all cursor-pointer ${
+                    reschedulePlacement === 'next_slot'
+                      ? 'bg-emerald-500/10 border-emerald-500/50 text-white'
+                      : 'bg-fb-surface-hover/30 border-white/5 text-fb-text-muted hover:bg-fb-surface-hover/60'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="reschedule_placement"
+                    checked={reschedulePlacement === 'next_slot'}
+                    onChange={() => setReschedulePlacement('next_slot')}
+                    className="mt-0.5 text-emerald-500 focus:ring-emerald-500"
+                  />
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 font-bold text-xs text-fb-text">
+                      <span>Khung giờ gần nhất (Ưu tiên đăng sớm)</span>
+                      <span className="px-2 py-0.2 rounded-full text-[9px] font-black bg-emerald-500/20 text-emerald-400">
+                        Khuyên Dùng
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-fb-text-muted leading-relaxed">
+                      Giữ nguyên thứ tự ưu tiên ban đầu. Bài viết sẽ được xếp vào các khung giờ hẹn đăng kế tiếp gần nhất của Fanpage.
+                    </p>
+                  </div>
+                </label>
+
+                {/** Lựa chọn 2: Nối tiếp vào cuối hàng chờ */}
+                <label
+                  onClick={() => setReschedulePlacement('end_queue')}
+                  className={`flex items-start gap-3 p-3.5 rounded-xl border transition-all cursor-pointer ${
+                    reschedulePlacement === 'end_queue'
+                      ? 'bg-blue-500/10 border-blue-500/50 text-white'
+                      : 'bg-fb-surface-hover/30 border-white/5 text-fb-text-muted hover:bg-fb-surface-hover/60'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="reschedule_placement"
+                    checked={reschedulePlacement === 'end_queue'}
+                    onChange={() => setReschedulePlacement('end_queue')}
+                    className="mt-0.5 text-blue-500 focus:ring-blue-500"
+                  />
+                  <div className="space-y-1">
+                    <div className="font-bold text-xs text-fb-text">
+                      Nối tiếp vào cuối hàng chờ (Đăng sau các bài đang chờ)
+                    </div>
+                    <p className="text-[11px] text-fb-text-muted leading-relaxed">
+                      Cập nhật mốc thời gian để xếp bài viết ra phía sau toàn bộ các bài viết đang chờ sẵn trong hàng đợi của Fanpage.
+                    </p>
+                  </div>
+                </label>
+              </div>
+
+              <div className="p-3 bg-fb-surface-hover/30 rounded-xl border border-white/5 text-[11px] text-fb-text-muted flex items-start gap-2">
+                <span className="material-symbols-outlined text-sm text-cyan-400 shrink-0 mt-0.5">info</span>
+                <span>
+                  Hệ thống sẽ xóa thông báo lỗi cũ, đặt trạng thái về <b>Sẵn sàng đăng</b> (COMPLETED) và tự động tính toán lại mốc giờ xuất bản theo đúng lịch cấu hình của Fanpage.
+                </span>
+              </div>
+            </div>
+
+            {/** Footer */}
+            <div className="px-6 py-4 border-t border-fb-surface-hover/60 flex items-center justify-end gap-2.5 bg-fb-surface">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowRescheduleModal(false);
+                  setSinglePostToReschedule(null);
+                }}
+                disabled={isRetryingFailedBatch}
+                className="px-4 py-2 bg-fb-surface-hover hover:bg-fb-surface-hover/80 text-fb-text rounded-xl text-xs font-bold transition-all cursor-pointer"
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                disabled={isRetryingFailedBatch}
+                onClick={() => {
+                  if (singlePostToReschedule) {
+                    ztteam_handleRetrySinglePost(singlePostToReschedule, reschedulePlacement);
+                  } else {
+                    ztteam_handleRetryFailedPostsBatch();
+                  }
+                }}
+                className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-emerald-500/20 flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                <span className={`material-symbols-outlined text-[16px] ${isRetryingFailedBatch ? 'animate-spin' : ''}`}>
+                  {isRetryingFailedBatch ? 'progress_activity' : 'check'}
+                </span>
+                <span>{isRetryingFailedBatch ? 'Đang xử lý...' : 'Xác nhận đưa về hàng chờ'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

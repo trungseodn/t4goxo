@@ -83,6 +83,11 @@ export class ZTTeamFacebookController {
     return this.facebookService.ztteam_updatePageSettings(pageId, req.user.sub, body);
   }
 
+  @Post('pages/:pageId/clear-checkpoint')
+  ztteam_clearCheckpoint(@Param('pageId') pageId: string, @Request() req: any) {
+    return this.facebookService.ztteam_clearCheckpoint(pageId, req.user.sub);
+  }
+
   @Get('pages/:pageId/settings')
   ztteam_getPageSettings(@Param('pageId') pageId: string, @Request() req: any) {
     return this.facebookService.ztteam_getPageSettings(pageId, req.user.sub);

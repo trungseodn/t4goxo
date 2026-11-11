@@ -32,6 +32,7 @@ services:
       context: .
       dockerfile: apps/api/Dockerfile
     container_name: ztreel4_api_prod
+    init: true
     ports:
       - "3004:3000"
     env_file:

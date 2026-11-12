@@ -829,38 +829,30 @@ export class ZTTeamImageController {
     try {
     /** ZTTeam: Tuân thủ tuyệt đối cấu hình Kiểu bài đăng chính trên Fanpage (post_format) */
     if (pageFormat === 'reel') {
-      /** Cấu hình: Nếu chọn reel thì đăng reel, nếu bài chuẩn bị đăng ko có reel thì đăng ảnh (đảm bảo phải có bài để đăng) */
-      if (image.video_url) {
-        let absoluteVideoPath = '';
-        if (image.video_url.startsWith('/storage/')) {
-          absoluteVideoPath = path.join(ztteam_getStorageRoot(), image.video_url.replace(/^\/storage\//, ''));
-        } else {
-          absoluteVideoPath = path.join(ztteam_getStorageRoot(), image.video_url.replace(/^[/\\]+/, ''));
-        }
-
-        if (fs.existsSync(absoluteVideoPath)) {
-          const response = await this.facebookService.ztteam_publishReel(
-            targetFbPageId,
-            absoluteVideoPath,
-            description
-          );
-          fbPostId = response.id;
-        } else {
-          /** Nếu file video không tìm thấy trên server -> fallback đăng Ảnh */
-          fbPostId = await this.facebookService.ztteam_publishPhoto(
-            targetFbPageId,
-            absoluteImagePath,
-            description
-          );
-        }
-      } else {
-        /** Bài chưa tạo video Reel -> Fallback đăng Ảnh để đảm bảo luôn có bài xuất bản */
-        fbPostId = await this.facebookService.ztteam_publishPhoto(
-          targetFbPageId,
-          absoluteImagePath,
-          description
+      /** Cấu hình: Fanpage dạng Reel tuyệt đối 100% chỉ đăng Video Reel, không fallback đăng ảnh */
+      if (!image.video_url) {
+        throw new BadRequestException(
+          `Fanpage "${image.page?.name || targetFbPageId}" được cấu hình chỉ đăng Video Reel. Bài viết này chưa có video Reel hoặc chưa render xong (trạng thái: ${image.video_status || 'chưa tạo'}). Vui lòng đợi video tạo xong trước khi đăng.`
         );
       }
+
+      let absoluteVideoPath = '';
+      if (image.video_url.startsWith('/storage/')) {
+        absoluteVideoPath = path.join(ztteam_getStorageRoot(), image.video_url.replace(/^\/storage\//, ''));
+      } else {
+        absoluteVideoPath = path.join(ztteam_getStorageRoot(), image.video_url.replace(/^[/\\]+/, ''));
+      }
+
+      if (!fs.existsSync(absoluteVideoPath)) {
+        throw new BadRequestException(`Tập tin video Reel không tồn tại trên máy chủ: ${absoluteVideoPath}`);
+      }
+
+      const response = await this.facebookService.ztteam_publishReel(
+        targetFbPageId,
+        absoluteVideoPath,
+        description
+      );
+      fbPostId = response.id;
     } else if (pageFormat === 'image') {
       /** Cấu hình: Nếu chọn ảnh thì chắc chắn phải đăng ảnh */
       fbPostId = await this.facebookService.ztteam_publishPhoto(

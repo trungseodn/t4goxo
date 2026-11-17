@@ -995,12 +995,13 @@ YOU MUST RETURN STRICTLY A SINGLE VALID JSON OBJECT WITH THIS EXACT STRUCTURE (N
   async ztteam_generateReelHookStory(
     title: string,
     content: string,
+    options?: { previousHooks?: string[]; tone?: string }
   ): Promise<{ hookHtml: string; plainText: string; paragraphs: string[] }> {
     const cleanTitle = (title || '').replace(/<[^>]*>?/gm, '').trim();
     const cleanContent = (content || '').replace(/<[^>]*>?/gm, '').replace(/\s+/g, ' ').trim();
 
-    // 1. Nếu nội dung đầu vào đã có sẵn định dạng Cold Case với [[...]], trích xuất trực tiếp
-    if (cleanContent.includes('[[') && cleanContent.includes(']]')) {
+    // 1. Nếu nội dung đầu vào đã có sẵn định dạng Cold Case với [[...]], trích xuất trực tiếp (chỉ khi không yêu cầu biến thể)
+    if (cleanContent.includes('[[') && cleanContent.includes(']]') && (!options?.previousHooks || options.previousHooks.length === 0)) {
       const extracted = this.ztteam_extractParagraphsFromColdCase(cleanContent);
       if (extracted && extracted.length >= 1) {
         const finalParagraphs = extracted.slice(0, 3);
@@ -1010,6 +1011,13 @@ YOU MUST RETURN STRICTLY A SINGLE VALID JSON OBJECT WITH THIS EXACT STRUCTURE (N
       }
     }
 
+    const variationConstraint = (options?.previousHooks && options.previousHooks.length > 0)
+      ? `\n\nCRITICAL VARIATION INSTRUCTION (DIFFERENT ANGLE MANDATORY):
+An earlier video reel for this story already used the following hook(s) or angle:
+${options.previousHooks.map((h, idx) => `[Previous Version #${idx + 1}]: "${h.substring(0, 250)}"`).join('\n')}
+You MUST write a completely DIFFERENT, FRESH, and UNIQUE hook. Choose an alternative dramatic angle, focus on different shocking clues, or introduce another perspective from the story details so this new video is 100% distinct from previous versions!`
+      : '';
+
     const systemPrompt = `You are a master viral Facebook Reel copywriter.
 Based strictly on the provided real story:
 Title: "${cleanTitle}"
@@ -1018,6 +1026,7 @@ Story Details:
 
 Task:
 Write a viral, high-suspense 3-paragraph Hook in ENGLISH for a 10-second Facebook Reel.
+${variationConstraint}
 
 CRITICAL REQUIREMENTS:
 1. TRUTHFUL TO ORIGINAL STORY: Every fact must be based strictly on the provided story details. Do NOT make up fake, irrelevant names or events.

@@ -773,6 +773,7 @@ export class ZTTeamHookVideoService {
             video_status: 'COMPLETED',
             video_engine: 'text_story',
             video_created_at: new Date(),
+            ai_script: storyData.plainText,
             error_log: null,
           },
         });
@@ -793,13 +794,34 @@ export class ZTTeamHookVideoService {
       const imageExt = path.extname(sourceImagePath).replace('.', '') || 'png';
       const imageDataUri = `data:image/${imageExt};base64,${imageBase64}`;
 
-      /** 3. Tạo kịch bản Hook 3 đoạn bám sát nội dung gốc bằng AI */
+      /** 3. Tạo kịch bản Hook 3 đoạn bám sát nội dung gốc bằng AI (tự động phân biệt nếu bài viết từng tạo trên Page khác) */
       let hookHtml = '';
       const rawStory = imageRecord.ai_caption || imageRecord.wp_post_title || '';
 
+      // Tìm các bài trước đó của cùng wp_post_id để tránh trùng nội dung hook
+      let previousHooks: string[] = [];
+      if (imageRecord.wp_post_id) {
+        try {
+          const prevRecords = await this.prisma.ztteam_images.findMany({
+            where: {
+              wp_post_id: imageRecord.wp_post_id,
+              id: { not: imageRecord.id },
+            },
+            select: { ai_script: true, ai_caption: true },
+            take: 3,
+          });
+          previousHooks = prevRecords
+            .map(r => r.ai_script || (r.ai_caption ? r.ai_caption.substring(0, 200) : ''))
+            .filter(Boolean);
+        } catch (e) {
+          // Bỏ qua nếu lỗi truy vấn
+        }
+      }
+
       const aiResult = await this.aiService.ztteam_generateReelHookStory(
         imageRecord.wp_post_title || 'Compelling Mystery Story',
-        rawStory
+        rawStory,
+        { previousHooks }
       );
       hookHtml = aiResult.hookHtml;
 
@@ -1068,6 +1090,7 @@ export class ZTTeamHookVideoService {
           video_status: 'COMPLETED',
           video_engine: 'hook_image',
           video_created_at: new Date(),
+          ai_script: plainText,
           error_log: null,
         },
       });

@@ -880,51 +880,43 @@ export class ZTTeamWordpressService {
             if (totalSynced >= batchSize) break;
             if (currentQueueCount + totalSynced >= queueLimit && !options?.forceSync) break;
 
-            /** 1. KIỂM TRA ĐỘC QUYỀN TOÀN CỤC: Tuyệt đối không cho phép 2 Fanpage lấy trùng cùng 1 bài viết */
+            /** 1. KIỂM TRA XOAY VÒNG: Fanpage không lấy bài mình đã từng đăng, và không trùng với bài đang nằm trong hàng chờ chưa đăng của Page khác */
             const postWpIdStr = post.id.toString();
             const postTitleTrimmed = (post.title || '').trim();
 
-            const alreadyInImagesGlobally = await this.prisma.ztteam_images.findFirst({
+            // 1.1 Bài này Fanpage này đã từng lấy chưa?
+            const alreadyInThisPage = await this.prisma.ztteam_images.findFirst({
               where: {
+                page_id: page.id,
                 OR: [
                   { wp_post_id: postWpIdStr },
                   ...(postTitleTrimmed ? [{ wp_post_title: postTitleTrimmed }] : []),
                   ...(post.link ? [{ wp_post_url: post.link }] : [])
                 ]
               },
-              select: { id: true, page_id: true }
+              select: { id: true }
             });
-            if (alreadyInImagesGlobally) {
+            if (alreadyInThisPage) {
               continue;
             }
 
-            const alreadyInHistoryGlobally = await this.prisma.ztteam_image_history.findFirst({
-              where: { wp_post_id: postWpIdStr },
-              select: { id: true, page_id: true }
+            const alreadyInThisPageHistory = await this.prisma.ztteam_image_history.findFirst({
+              where: { page_id: page.id, wp_post_id: postWpIdStr },
+              select: { id: true }
             });
-            if (alreadyInHistoryGlobally) {
+            if (alreadyInThisPageHistory) {
               continue;
             }
 
-            const alreadyInReelsGlobally = await this.prisma.ztteam_reels.findFirst({
+            // 1.2 Bài này có đang nằm trong hàng chờ CHƯA ĐĂNG của bất kỳ Fanpage nào khác không?
+            const currentlyActiveUnposted = await this.prisma.ztteam_images.findFirst({
               where: {
-                OR: [
-                  { wp_post_id: postWpIdStr },
-                  ...(postTitleTrimmed ? [{ wp_post_title: postTitleTrimmed }] : []),
-                  ...(post.link ? [{ wp_post_url: post.link }] : [])
-                ]
+                wp_post_id: postWpIdStr,
+                is_posted: false,
               },
-              select: { id: true, page_id: true }
+              select: { id: true }
             });
-            if (alreadyInReelsGlobally) {
-              continue;
-            }
-
-            const alreadyInReelHistoryGlobally = await this.prisma.ztteam_reel_history.findFirst({
-              where: { wp_post_id: postWpIdStr },
-              select: { id: true, page_id: true }
-            });
-            if (alreadyInReelHistoryGlobally) {
+            if (currentlyActiveUnposted) {
               continue;
             }
 
@@ -1355,6 +1347,22 @@ export class ZTTeamWordpressService {
           this.logger.log(`Kết thúc phân trang WordPress hoặc đạt giới hạn lưu trữ (trang ${pageNum}): ${fetchErr.message}`);
           break;
         }
+      }
+
+      if (availableUnusedPosts.length === 0) {
+        this.logger.log(`[Xoay Vòng Bài Viết] Website ${site.wp_url} đã dùng hết bài mới toàn cục. Bắt đầu cơ chế xoay vòng bài viết cho ${sitePages.length} Fanpage.`);
+        for (const page of sitePages) {
+          try {
+            const res = await this.ztteam_syncPostsForPage(page.id, { maxBatch, userId, forceSync: true });
+            if (res.success && res.count > 0) {
+              totalPostsSynced += res.count;
+              successfulPages++;
+            }
+          } catch (syncErr: any) {
+            this.logger.warn(`Lỗi xoay vòng cho page ${page.name}: ${syncErr.message}`);
+          }
+        }
+        continue;
       }
 
       this.logger.log(`[Đồng Bộ Độc Quyền] Website ${site.wp_url}: Tìm thấy ${availableUnusedPosts.length} bài mới chưa từng dùng cho ${sitePages.length} Fanpage.`);

@@ -528,34 +528,55 @@ export class ZTTeamWordpressService {
 
   /**
    * ZTTeam: Tự động dọn dẹp các bài trùng lặp chưa đăng trước khi đồng bộ mới
+   * Chỉ dọn dẹp các bài đang nằm trong hàng chờ CHƯA ĐĂNG bị trùng nhau giữa các Fanpage,
+   * TUYỆT ĐỐI không xóa bài xoay vòng của Page khác chỉ vì Page cũ đã từng đăng trong quá khứ!
    */
   async ztteam_autoCleanupDuplicatesBeforeSync(): Promise<number> {
     let removedCount = 0;
     try {
+      // 1. Quét trùng lặp giữa các bài CHƯA ĐĂNG có cùng wp_post_id
       const duplicatesById = await this.prisma.$queryRaw<Array<{ wp_post_id: string; cnt: number }>>`
         SELECT wp_post_id, COUNT(*)::int as cnt
         FROM ztteam_images
-        WHERE wp_post_id IS NOT NULL AND wp_post_id != ''
+        WHERE wp_post_id IS NOT NULL AND wp_post_id != '' AND is_posted = false
         GROUP BY wp_post_id
         HAVING COUNT(*) > 1
       `;
 
       for (const dup of duplicatesById) {
         const allCopies = await this.prisma.ztteam_images.findMany({
-          where: { wp_post_id: dup.wp_post_id },
+          where: { wp_post_id: dup.wp_post_id, is_posted: false },
           orderBy: [
-            { is_posted: 'desc' },
             { created_at: 'asc' }
           ]
         });
 
         const [primary, ...toRemove] = allCopies;
         for (const item of toRemove) {
-          if (!item.is_posted) {
-            await this.prisma.ztteam_images.delete({ where: { id: item.id } });
-            removedCount++;
-          }
+          await this.prisma.ztteam_images.delete({ where: { id: item.id } });
+          removedCount++;
         }
+      }
+
+      // 2. Quét trùng lặp trên CÙNG 1 Fanpage nếu vô tình nhận lại bài mà Fanpage đó đã từng đăng
+      const duplicatesOnSamePage = await this.prisma.$queryRaw<Array<{ page_id: string; wp_post_id: string }>>`
+        SELECT i_queue.page_id, i_queue.wp_post_id
+        FROM ztteam_images i_queue
+        INNER JOIN ztteam_images i_posted 
+          ON i_queue.page_id = i_posted.page_id 
+          AND i_queue.wp_post_id = i_posted.wp_post_id 
+          AND i_queue.id != i_posted.id
+        WHERE i_queue.is_posted = false AND i_posted.is_posted = true
+      `;
+      for (const dup of duplicatesOnSamePage) {
+        await this.prisma.ztteam_images.deleteMany({
+          where: {
+            page_id: dup.page_id,
+            wp_post_id: dup.wp_post_id,
+            is_posted: false,
+          }
+        });
+        removedCount++;
       }
     } catch (e: any) {
       this.logger.warn(`Auto cleanup duplicates before sync: ${e.message}`);

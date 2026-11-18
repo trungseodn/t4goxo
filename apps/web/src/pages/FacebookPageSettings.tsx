@@ -334,7 +334,7 @@ export default function FacebookPageSettings() {
   const ztteam_loadQueue = async (isSilent = false) => {
     try {
       if (!isSilent) setIsLoadingQueue(true);
-      const imgRes = await api.get(`image/list?fbPageId=${id}&limit=50&_t=${Date.now()}`);
+      const imgRes = await api.get(`image/list?fbPageId=${id}&limit=100&_t=${Date.now()}`);
       setImagesQueue(imgRes.data?.data || []);
     } catch (error: any) {
       if (!isSilent) ztteam_showToast('Lỗi tải danh sách bài viết', 'error');
@@ -1637,9 +1637,13 @@ export default function FacebookPageSettings() {
               <div className="flex items-center gap-3">
                 <span className="material-symbols-outlined text-amber-400 text-[26px]">pending_actions</span>
                 <div>
-                  <h3 className="text-base font-black text-fb-text">Hàng Đợi Xuất Bản Bài Viết Ảnh 2K</h3>
+                  <h3 className="text-base font-black text-fb-text">
+                    {postFormat === 'reel' ? 'Hàng Đợi Xuất Bản Video Reel' : postFormat === 'mixed' ? 'Hàng Đợi Xuất Bản Reel & Ảnh 2K' : 'Hàng Đợi Xuất Bản Bài Viết Ảnh 2K'}
+                  </h3>
                   <p className="text-[11px] text-fb-text-muted mt-0.5">
-                    Các bài viết đã tạo ảnh AI 2K thành công và đang chờ đến khung giờ xuất bản tự động ({queueItems.length} bài)
+                    {postFormat === 'reel' 
+                      ? `Các video Reel đã sẵn sàng hoặc đang chờ đến khung giờ xuất bản tự động (${queueItems.length} bài)`
+                      : `Các bài viết đã tạo ảnh AI 2K thành công và đang chờ đến khung giờ xuất bản tự động (${queueItems.length} bài)`}
                   </p>
                 </div>
               </div>

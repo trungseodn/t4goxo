@@ -463,21 +463,20 @@ export class ZTTeamImageController {
     let removedCount = 0;
     const details: any[] = [];
 
-    // 1. Quét trùng lặp theo wp_post_id trong ztteam_images
+    // 1. Quét trùng lặp giữa các bài CHƯA ĐĂNG có cùng wp_post_id (không để 2 page cùng giữ bài chưa đăng)
     const duplicatesById = await this.prisma.$queryRaw<Array<{ wp_post_id: string; cnt: number }>>`
       SELECT wp_post_id, COUNT(*)::int as cnt
       FROM ztteam_images
-      WHERE wp_post_id IS NOT NULL AND wp_post_id != ''
+      WHERE wp_post_id IS NOT NULL AND wp_post_id != '' AND is_posted = false
       GROUP BY wp_post_id
       HAVING COUNT(*) > 1
     `;
 
     for (const dup of duplicatesById) {
       const allCopies = await this.prisma.ztteam_images.findMany({
-        where: { wp_post_id: dup.wp_post_id },
+        where: { wp_post_id: dup.wp_post_id, is_posted: false },
         include: { page: true },
         orderBy: [
-          { is_posted: 'desc' },
           { created_at: 'asc' }
         ]
       });
@@ -485,26 +484,24 @@ export class ZTTeamImageController {
       const [primary, ...toRemove] = allCopies;
 
       for (const item of toRemove) {
-        if (!item.is_posted) {
-          await this.prisma.ztteam_images.delete({ where: { id: item.id } });
-          removedCount++;
-          details.push({
-            type: 'image_by_id',
-            wpPostId: dup.wp_post_id,
-            removedId: item.id,
-            title: item.wp_post_title,
-            removedFromPage: item.page?.name || item.page_id || 'Kho thủ công',
-            keptOnPage: primary.page?.name || primary.page_id || 'Kho thủ công'
-          });
-        }
+        await this.prisma.ztteam_images.delete({ where: { id: item.id } });
+        removedCount++;
+        details.push({
+          type: 'image_by_id',
+          wpPostId: dup.wp_post_id,
+          removedId: item.id,
+          title: item.wp_post_title,
+          removedFromPage: item.page?.name || item.page_id || 'Kho thủ công',
+          keptOnPage: primary.page?.name || primary.page_id || 'Kho thủ công'
+        });
       }
     }
 
-    // 2. Quét trùng lặp theo Tiêu đề (wp_post_title) trong ztteam_images
+    // 2. Quét trùng lặp giữa các bài CHƯA ĐĂNG có cùng Tiêu đề (wp_post_title)
     const duplicatesByTitle = await this.prisma.$queryRaw<Array<{ clean_title: string; cnt: number }>>`
       SELECT LOWER(TRIM(wp_post_title)) as clean_title, COUNT(*)::int as cnt
       FROM ztteam_images
-      WHERE wp_post_title IS NOT NULL AND wp_post_title != ''
+      WHERE wp_post_title IS NOT NULL AND wp_post_title != '' AND is_posted = false
       GROUP BY LOWER(TRIM(wp_post_title))
       HAVING COUNT(*) > 1
     `;
@@ -515,11 +512,11 @@ export class ZTTeamImageController {
           wp_post_title: {
             mode: 'insensitive',
             equals: dup.clean_title
-          }
+          },
+          is_posted: false
         },
         include: { page: true },
         orderBy: [
-          { is_posted: 'desc' },
           { created_at: 'asc' }
         ]
       });
@@ -527,20 +524,39 @@ export class ZTTeamImageController {
       if (allCopies.length > 1) {
         const [primary, ...toRemove] = allCopies;
         for (const item of toRemove) {
-          if (!item.is_posted) {
-            await this.prisma.ztteam_images.delete({ where: { id: item.id } });
-            removedCount++;
-            details.push({
-              type: 'image_by_title',
-              wpPostId: item.wp_post_id,
-              removedId: item.id,
-              title: item.wp_post_title,
-              removedFromPage: item.page?.name || item.page_id || 'Kho thủ công',
-              keptOnPage: primary.page?.name || primary.page_id || 'Kho thủ công'
-            });
-          }
+          await this.prisma.ztteam_images.delete({ where: { id: item.id } });
+          removedCount++;
+          details.push({
+            type: 'image_by_title',
+            wpPostId: item.wp_post_id,
+            removedId: item.id,
+            title: item.wp_post_title,
+            removedFromPage: item.page?.name || item.page_id || 'Kho thủ công',
+            keptOnPage: primary.page?.name || primary.page_id || 'Kho thủ công'
+          });
         }
       }
+    }
+
+    // 3. Quét bài chưa đăng trên CÙNG 1 Fanpage nếu Fanpage đó đã từng đăng bài đó rồi
+    const duplicatesOnSamePage = await this.prisma.$queryRaw<Array<{ page_id: string; wp_post_id: string }>>`
+      SELECT i_queue.page_id, i_queue.wp_post_id
+      FROM ztteam_images i_queue
+      INNER JOIN ztteam_images i_posted 
+        ON i_queue.page_id = i_posted.page_id 
+        AND i_queue.wp_post_id = i_posted.wp_post_id 
+        AND i_queue.id != i_posted.id
+      WHERE i_queue.is_posted = false AND i_posted.is_posted = true
+    `;
+    for (const dup of duplicatesOnSamePage) {
+      const removed = await this.prisma.ztteam_images.deleteMany({
+        where: {
+          page_id: dup.page_id,
+          wp_post_id: dup.wp_post_id,
+          is_posted: false,
+        }
+      });
+      removedCount += removed.count;
     }
 
     // 3. Quét trùng lặp theo wp_post_id trong ztteam_reels

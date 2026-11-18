@@ -41,7 +41,7 @@ export default function ZTTeamAIPostCard({
   onMarkPosted,
 }: ZTTeamAIPostCardProps) {
   const [isExpanded, setIsExpanded] = useState(false);
-  const [showVideo, setShowVideo] = useState(false);
+  const [showVideo, setShowVideo] = useState(Boolean(item.video_url));
   const [isMarkingPosted, setIsMarkingPosted] = useState(false);
   const [captionText, setCaptionText] = useState(item.ai_caption || '');
   const [firstCommentText, setFirstCommentText] = useState(item.ai_first_comment || '');

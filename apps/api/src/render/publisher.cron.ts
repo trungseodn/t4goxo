@@ -397,10 +397,11 @@ export class ZTTeamPublisherCron {
     this.logger.log(`Auto-publishing reel ${reel.id} to page ${page.name}...`);
 
     try {
-      /** ZTTeam: Kiểm tra an toàn trước khi gọi Facebook API - Không bao giờ đăng nếu bài này đã được xuất bản ở Page khác */
+      /** ZTTeam: Kiểm tra an toàn trước khi gọi Facebook API - Không bao giờ đăng nếu bài này ĐÃ ĐƯỢC XUẤT BẢN trên chính Fanpage này */
       const reelTitleTrimmed = (reel.wp_post_title || '').trim();
       const alreadyPostedReel = await this.prisma.ztteam_reels.findFirst({
         where: {
+          page_id: page.id,
           id: { not: reel.id },
           is_posted: true,
           OR: [
@@ -413,6 +414,7 @@ export class ZTTeamPublisherCron {
 
       const alreadyPostedImage = await this.prisma.ztteam_images.findFirst({
         where: {
+          page_id: page.id,
           is_posted: true,
           OR: [
             { wp_post_id: reel.wp_post_id },
@@ -423,8 +425,7 @@ export class ZTTeamPublisherCron {
       });
 
       if (alreadyPostedReel || alreadyPostedImage) {
-        const otherPageName = alreadyPostedReel?.page?.name || alreadyPostedImage?.page?.name || 'trang khác';
-        this.logger.warn(`[CHỐNG TRÙNG TOÀN CỤC] Reel "${reel.wp_post_title}" (ID #${reel.wp_post_id}) ĐÃ ĐƯỢC XUẤT BẢN trên Fanpage "${otherPageName}". Tự động HỦY bản sao trên Page "${page.name}" để không trùng.`);
+        this.logger.warn(`[CHỐNG TRÙNG TRÊN PAGE] Reel "${reel.wp_post_title}" (ID #${reel.wp_post_id}) ĐÃ ĐƯỢC XUẤT BẢN trước đây trên Fanpage "${page.name}". Tự động HỦY bản sao để không trùng lịch sử của Page.`);
         await this.prisma.ztteam_reels.delete({ where: { id: reel.id } }).catch(() => {});
         return;
       }
@@ -603,10 +604,11 @@ export class ZTTeamPublisherCron {
     this.logger.log(`Auto-publishing image ${image.id} to page ${page.name} (forceImageOnly: ${forceImageOnly})...`);
 
     try {
-      /** ZTTeam: Kiểm tra an toàn trước khi gọi Facebook API - Không bao giờ đăng nếu bài này đã được xuất bản ở Page khác */
+      /** ZTTeam: Kiểm tra an toàn trước khi gọi Facebook API - Không bao giờ đăng nếu bài này ĐÃ ĐƯỢC XUẤT BẢN trên chính Fanpage này */
       const imageTitleTrimmed = (image.wp_post_title || '').trim();
       const alreadyPostedImage = await this.prisma.ztteam_images.findFirst({
         where: {
+          page_id: page.id,
           id: { not: image.id },
           is_posted: true,
           OR: [
@@ -619,6 +621,7 @@ export class ZTTeamPublisherCron {
 
       const alreadyPostedReel = await this.prisma.ztteam_reels.findFirst({
         where: {
+          page_id: page.id,
           is_posted: true,
           OR: [
             { wp_post_id: image.wp_post_id },
@@ -629,8 +632,7 @@ export class ZTTeamPublisherCron {
       });
 
       if (alreadyPostedImage || alreadyPostedReel) {
-        const otherPageName = alreadyPostedImage?.page?.name || alreadyPostedReel?.page?.name || 'trang khác';
-        this.logger.warn(`[CHỐNG TRÙNG TOÀN CỤC] Bài viết "${image.wp_post_title}" (ID #${image.wp_post_id}) ĐÃ ĐƯỢC XUẤT BẢN trên Fanpage "${otherPageName}". Tự động HỦY bản sao trên Page "${page.name}" để không trùng.`);
+        this.logger.warn(`[CHỐNG TRÙNG TRÊN PAGE] Bài viết "${image.wp_post_title}" (ID #${image.wp_post_id}) ĐÃ ĐƯỢC XUẤT BẢN trước đây trên Fanpage "${page.name}". Tự động HỦY bản sao để không trùng lịch sử của Page.`);
         await this.prisma.ztteam_images.delete({ where: { id: image.id } }).catch(() => {});
         return;
       }
